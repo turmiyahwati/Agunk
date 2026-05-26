@@ -1,12 +1,17 @@
 "use client";
 import { motion } from "framer-motion";
 import { Activity } from "lucide-react";
+import { useHomepage } from "@/hooks/useHomepage";
+import { HighlightTitle } from "./ui/HighlightTitle";
 
 /**
  * Friendly hero strip placed above the public monitoring grid.
  * Reuses existing glassmorphism + neon classes — does not introduce new style.
+ * Text content is editable via /admin/homepage.
  */
 export function WelcomeBanner() {
+  const { content } = useHomepage();
+
   return (
     <motion.section
       initial={{ opacity: 0, y: 12 }}
@@ -22,23 +27,23 @@ export function WelcomeBanner() {
           <span className="grid h-3 w-3 place-items-center">
             <span className="h-1.5 w-1.5 animate-pulse-glow rounded-full bg-emerald-400" />
           </span>
-          Monitoring Server · Live
+          {content.heroBadge}
         </div>
 
-        <h1 className="text-3xl font-extrabold leading-tight tracking-tight md:text-4xl">
-          Selamat datang di pusat <span className="neon-text">monitoring Server VPN PREMIUM</span>{" "}
-          PT Sontoloyo
-        </h1>
+        <HighlightTitle
+          as="h1"
+          className="text-3xl font-extrabold leading-tight tracking-tight md:text-4xl"
+          text={content.heroTitle}
+          gradient={content.heroTitleGradient}
+        />
 
         <p className="mt-3 max-w-2xl text-sm text-slate-400 md:text-base">
-          Pantau status, slot, kecepatan, ping, semua server langsung dari sini
-          serta kesehatan seluruh service server VPN SSH/XRAY dalam satu website
-          yang otomatis update setiap beberapa detik.
+          {content.heroSubtitle}
         </p>
 
         <div className="mt-4 inline-flex items-center gap-2 text-xs text-slate-500">
           <Activity size={14} className="text-cyan-300" />
-          Data live · langsung dari server
+          {content.heroFooter}
         </div>
       </div>
     </motion.section>

@@ -1,13 +1,14 @@
 "use client";
 import Link from "next/link";
 import { useBranding } from "@/hooks/useBranding";
-
-const BRAND = process.env.NEXT_PUBLIC_BRAND_NAME || "PT Sontoloyo";
-const SUBBRAND = process.env.NEXT_PUBLIC_BRAND_SUFFIX || "Monitor";
+import { useHomepage } from "@/hooks/useHomepage";
+import { splitBrandText } from "@/lib/homepage";
 
 export function Logo({ size = "md" }: { size?: "sm" | "md" | "lg" }) {
   const cls = size === "lg" ? "text-2xl" : size === "sm" ? "text-base" : "text-xl";
   const { logo } = useBranding();
+  const { content } = useHomepage();
+  const { brand, suffix } = splitBrandText(content.brandName);
 
   return (
     <Link href="/" className="inline-flex items-center gap-2">
@@ -26,9 +27,13 @@ export function Logo({ size = "md" }: { size?: "sm" | "md" | "lg" }) {
         )}
       </div>
       <span className={`font-bold tracking-tight ${cls}`}>
-        <span className="neon-text">{BRAND}</span>
-        <span className="text-slate-400"> · </span>
-        <span className="text-slate-300">{SUBBRAND}</span>
+        <span className="neon-text">{brand}</span>
+        {suffix !== undefined && (
+          <>
+            <span className="text-slate-400"> · </span>
+            <span className="text-slate-300">{suffix}</span>
+          </>
+        )}
       </span>
     </Link>
   );
