@@ -2,10 +2,8 @@
 import { motion } from "framer-motion";
 import { Activity } from "lucide-react";
 
-const BRAND = process.env.NEXT_PUBLIC_BRAND_NAME || "PT Sontoloyo";
-
 /**
- * Elegant welcome / hero strip placed above the public monitoring grid.
+ * Friendly hero strip placed above the public monitoring grid.
  * Reuses existing glassmorphism + neon classes — does not introduce new style.
  */
 export function WelcomeBanner() {
@@ -24,23 +22,22 @@ export function WelcomeBanner() {
           <span className="grid h-3 w-3 place-items-center">
             <span className="h-1.5 w-1.5 animate-pulse-glow rounded-full bg-emerald-400" />
           </span>
-          Realtime Monitoring · Live
+          Monitoring Server
         </div>
 
         <h1 className="text-3xl font-extrabold leading-tight tracking-tight md:text-4xl">
-          Selamat datang di pusat <span className="neon-text">monitoring realtime</span>
-          <br className="hidden md:block" />
-          VPN / Xray oleh {BRAND}
+          Cek <span className="neon-text">server VPN</span> kamu,<br className="hidden md:block" />
+          {" "}realtime &amp; tanpa ribet.
         </h1>
 
         <p className="mt-3 max-w-2xl text-sm text-slate-400 md:text-base">
-          Pantau status, slot, traffic, ping, serta kesehatan seluruh server VPN/Xray
-          dalam satu panel premium yang elegan dan otomatis update setiap beberapa detik.
+          Pantau status, slot, dan kecepatan semua server langsung dari sini.
+          Update otomatis tiap beberapa detik — gak perlu login.
         </p>
 
         <div className="mt-4 inline-flex items-center gap-2 text-xs text-slate-500">
           <Activity size={14} className="text-cyan-300" />
-          Data segar otomatis · Tidak perlu login untuk melihat status
+          Data live · langsung dari server
         </div>
       </div>
     </motion.section>

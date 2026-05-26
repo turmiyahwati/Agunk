@@ -33,3 +33,7 @@ Thumbs.db
 __pycache__
 *.pyc
 .venv
+
+# user-uploaded logo files (keep the upload directory tracked via .gitkeep)
+public/uploads/*
+!public/uploads/.gitkeep

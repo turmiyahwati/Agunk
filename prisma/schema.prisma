@@ -87,3 +87,11 @@ model ServerMetric {
 
   @@index([serverId, ts])
 }
+
+// Generic key-value store for runtime-editable settings (e.g. logoUrl).
+// Used by the admin → Branding page; no PII or secrets stored here.
+model Setting {
+  key       String   @id
+  value     String?
+  updatedAt DateTime @updatedAt
+}
