@@ -36,7 +36,9 @@ export default function SettingsPage() {
         </Card>
 
         <Card icon={<Terminal size={16} />} title="External Cron">
-          <p className="text-sm text-slate-400">Pakai header <code className="text-cyan-300">X-Sync-Token</code>:</p>
+          <p className="text-sm text-slate-400">
+            Pakai header <code className="text-cyan-300">X-Sync-Token</code>:
+          </p>
           <pre className="mt-2 overflow-x-auto rounded-lg border border-white/10 bg-black/60 p-3 text-xs">
 {`*/1 * * * * curl -fsS \\
   -H "X-Sync-Token: $MONITOR_SYNC_TOKEN" \\
@@ -50,6 +52,8 @@ export default function SettingsPage() {
             <li><span className="text-slate-400">NEXTAUTH_SECRET</span> — secret JWT</li>
             <li><span className="text-slate-400">MONITOR_SYNC_TOKEN</span> — token cron</li>
             <li><span className="text-slate-400">NEXT_PUBLIC_REFRESH_MS</span> — interval polling FE</li>
+            <li><span className="text-slate-400">NEXT_PUBLIC_WHATSAPP_NUMBER</span> — nomor admin (homepage)</li>
+            <li><span className="text-slate-400">NEXT_PUBLIC_BRAND_NAME</span> — nama brand di header</li>
           </ul>
         </Card>
 
@@ -59,8 +63,9 @@ export default function SettingsPage() {
           </p>
           <pre className="mt-2 overflow-x-auto rounded-lg border border-white/10 bg-black/60 p-3 text-xs">
 {`# di VPS Debian/Ubuntu:
-curl -fsSL https://your-domain/install-agent.sh | sudo bash
-# atau ikuti README: vps-agent/README.md`}
+cd /tmp && git clone https://github.com/<your-org>/<repo>.git agent
+cd agent/vps-agent && sudo bash install.sh
+# ikuti README: vps-agent/README.md`}
           </pre>
         </Card>
       </div>
@@ -72,7 +77,8 @@ function Card({ icon, title, children }: { icon: React.ReactNode; title: string;
   return (
     <div className="glass p-5">
       <div className="mb-2 flex items-center gap-2 text-cyan-300">
-        {icon}<h3 className="text-sm font-semibold uppercase tracking-wider">{title}</h3>
+        {icon}
+        <h3 className="text-sm font-semibold uppercase tracking-wider">{title}</h3>
       </div>
       {children}
     </div>

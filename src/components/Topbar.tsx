@@ -36,13 +36,17 @@ export function Topbar({ onToggleSidebar, showSync = false }: { onToggleSidebar?
           </button>
         )}
         <div className="hidden text-right md:block">
-          <div className="text-sm font-medium">{data?.user?.name}</div>
-          <div className="text-xs text-slate-400">{(data?.user as any)?.role}</div>
+          <div className="text-sm font-medium">{data?.user?.name || "Admin"}</div>
+          <div className="text-xs text-slate-400">Administrator</div>
         </div>
         <div className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-cyan-400 to-purple-600 text-sm font-bold text-black">
-          {(data?.user?.name || "?").slice(0, 1).toUpperCase()}
+          {(data?.user?.name || "A").slice(0, 1).toUpperCase()}
         </div>
-        <button onClick={() => signOut({ callbackUrl: "/" })} className="rounded-lg p-2 text-slate-300 hover:bg-rose-500/10 hover:text-rose-300">
+        <button
+          onClick={() => signOut({ callbackUrl: "/" })}
+          className="rounded-lg p-2 text-slate-300 hover:bg-rose-500/10 hover:text-rose-300"
+          title="Sign out"
+        >
           <LogOut size={18} />
         </button>
       </div>

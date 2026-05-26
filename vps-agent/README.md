@@ -1,6 +1,7 @@
-# Agunk VPS Agent
+# PT Sontoloyo Monitor — VPS Agent
 
-Lightweight Python (FastAPI) agent that exposes server health to the Agunk website.
+Lightweight Python (FastAPI) agent that exposes server health to the
+**PT Sontoloyo Monitor** dashboard. Author: **Pakde Xresx Digital Store**.
 
 ## What it reports
 
@@ -33,15 +34,15 @@ Public: `/health` (no auth) — useful for uptime checks.
 
 ```bash
 # upload this folder to the VPS, then:
-sudo AGUNK_API_KEY="$(openssl rand -hex 24)" bash install.sh
+sudo SONTOLOYO_API_KEY="$(openssl rand -hex 24)" bash install.sh
 ```
 
 The installer:
 
 1. Installs `python3-venv`, `iproute2`, `iputils-ping`, `curl`.
-2. Copies the agent to `/opt/agunk-agent` and creates a `.venv`.
-3. Writes `/etc/agunk-agent.env` with `AGUNK_API_KEY`, `AGUNK_HOST`, `AGUNK_PORT`.
-4. Installs and starts the `agunk-agent.service` systemd unit.
+2. Copies the agent to `/opt/sontoloyo-agent` and creates a `.venv`.
+3. Writes `/etc/sontoloyo-agent.env` with `SONTOLOYO_API_KEY`, `SONTOLOYO_HOST`, `SONTOLOYO_PORT`.
+4. Installs and starts the `sontoloyo-agent.service` systemd unit.
 5. Opens the firewall port via `ufw` (if present).
 
 ## Manual test
@@ -51,12 +52,12 @@ curl http://127.0.0.1:8787/health
 curl -H "X-API-Key: $YOUR_KEY" http://127.0.0.1:8787/api/status
 ```
 
-## Connect to Agunk dashboard
+## Connect to dashboard
 
 In **Admin → Servers → Add Server**, set:
 
 - **VPS Agent base URL** → `http://YOUR_VPS_IP:8787`
-- **API Key** → the value from `/etc/agunk-agent.env`
+- **API Key** → the value from `/etc/sontoloyo-agent.env`
 
 Then click the **Wifi** icon in the row to test, or wait for the next sync.
 
@@ -64,14 +65,14 @@ Then click the **Wifi** icon in the row to test, or wait for the next sync.
 
 ```bash
 # logs
-journalctl -u agunk-agent -f
+journalctl -u sontoloyo-agent -f
 
 # restart
-systemctl restart agunk-agent
+systemctl restart sontoloyo-agent
 
 # rotate key
-sed -i "s|^AGUNK_API_KEY=.*|AGUNK_API_KEY=$(openssl rand -hex 24)|" /etc/agunk-agent.env
-systemctl restart agunk-agent
+sed -i "s|^SONTOLOYO_API_KEY=.*|SONTOLOYO_API_KEY=$(openssl rand -hex 24)|" /etc/sontoloyo-agent.env
+systemctl restart sontoloyo-agent
 
 # uninstall
 sudo bash uninstall.sh
@@ -81,8 +82,8 @@ sudo bash uninstall.sh
 
 For accurate `total_ssh` and `total_xray`, drop one user per line in:
 
-- `/etc/agunk/ssh.users`
-- `/etc/agunk/xray.users`
+- `/etc/sontoloyo/ssh.users`
+- `/etc/sontoloyo/xray.users`
 
 If those files are missing, the agent falls back to:
 - SSH: count of `/etc/passwd` users with `uid>=1000` and a real shell.
@@ -90,10 +91,10 @@ If those files are missing, the agent falls back to:
 
 ## Security
 
-- **Always set** a strong `AGUNK_API_KEY`. The website never exposes it to clients.
+- **Always set** a strong `SONTOLOYO_API_KEY`. The dashboard never exposes it to clients.
 - Bind to a private interface or restrict via `ufw` if you can:
   ```bash
-  ufw allow from <agunk-website-ip> to any port 8787 proto tcp
+  ufw allow from <dashboard-ip> to any port 8787 proto tcp
   ufw deny 8787/tcp
   ```
 - Put it behind nginx + TLS for production:

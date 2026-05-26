@@ -1,68 +1,125 @@
-import Link from "next/link";
-import { ArrowRight, Activity, Globe2, Zap, Server } from "lucide-react";
-import { Logo } from "@/components/ui/Logo";
+"use client";
+import { useEffect, useMemo, useState } from "react";
+import { Search, Globe, Server as ServerIcon, Activity, Wifi, Users } from "lucide-react";
+import { useServers } from "@/hooks/useServers";
+import { ServerCard } from "@/components/ServerCard";
+import { StatCard } from "@/components/StatCard";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { PublicHeader } from "@/components/PublicHeader";
+import { WelcomeBanner } from "@/components/WelcomeBanner";
 
-export default function Landing() {
+const BRAND = process.env.NEXT_PUBLIC_BRAND_NAME || "PT Sontoloyo";
+const AUTHOR = process.env.NEXT_PUBLIC_AUTHOR || "Pakde Xresx Digital Store";
+const REFRESH_MS = Number(process.env.NEXT_PUBLIC_REFRESH_MS || 10000);
+
+type Stats = {
+  servers: { total: number; online: number; offline: number; full: number; warning: number };
+  connections: { active: number; capacity: number };
+};
+
+export default function PublicMonitoring() {
+  const { servers, loading } = useServers();
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [q, setQ] = useState("");
+  const [country, setCountry] = useState("ALL");
+  const [provider, setProvider] = useState("ALL");
+
+  // Realtime stats polling
+  useEffect(() => {
+    let alive = true;
+    const fetchStats = async () => {
+      try {
+        const j = await fetch("/api/stats", { cache: "no-store" }).then((r) => r.json());
+        if (alive) setStats(j);
+      } catch {}
+    };
+    fetchStats();
+    const t = setInterval(fetchStats, REFRESH_MS);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  const countries = useMemo(
+    () => Array.from(new Set((servers || []).map((s) => s.countryName))).sort(),
+    [servers],
+  );
+  const providers = useMemo(
+    () => Array.from(new Set((servers || []).map((s) => s.provider))).sort(),
+    [servers],
+  );
+
+  const filtered = useMemo(() => {
+    return (servers || []).filter((s) => {
+      if (country !== "ALL" && s.countryName !== country) return false;
+      if (provider !== "ALL" && s.provider !== provider) return false;
+      if (q && !`${s.name} ${s.domain} ${s.countryName} ${s.provider}`.toLowerCase().includes(q.toLowerCase()))
+        return false;
+      return true;
+    });
+  }, [servers, q, country, provider]);
+
   return (
-    <main className="relative min-h-screen overflow-hidden">
-      {/* Nav */}
-      <nav className="container mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
-        <Logo />
-        <div className="flex items-center gap-3">
-          <Link href="/login" className="btn-ghost">Login</Link>
-          <Link href="/register" className="btn-primary">
-            Get Started <ArrowRight size={16} />
-          </Link>
-        </div>
-      </nav>
+    <div className="min-h-screen">
+      <PublicHeader />
 
-      {/* Hero */}
-      <section className="container mx-auto max-w-6xl px-6 pt-20 pb-24 text-center">
-        <div className="mx-auto mb-6 inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/5 px-3 py-1 text-xs text-cyan-300">
-          <span className="h-1.5 w-1.5 animate-pulse-glow rounded-full bg-emerald-400" />
-          Real-time monitoring · v1.0
-        </div>
-        <h1 className="mx-auto max-w-3xl text-5xl font-extrabold leading-tight md:text-6xl">
-          Premium <span className="neon-text">VPN / Xray</span><br />
-          monitoring dashboard
-        </h1>
-        <p className="mx-auto mt-5 max-w-2xl text-base text-slate-400 md:text-lg">
-          Pantau status, slot, traffic, dan kesehatan semua server VPN/Xray Anda dalam satu panel
-          futuristic dengan data realtime dari VPS agent.
-        </p>
-        <div className="mt-8 flex items-center justify-center gap-3">
-          <Link href="/register" className="btn-primary">
-            Buat Akun Member <ArrowRight size={16} />
-          </Link>
-          <Link href="/login" className="btn-ghost">Login Dashboard</Link>
-        </div>
-      </section>
+      <main className="container mx-auto max-w-7xl space-y-6 px-4 py-6 md:px-6 md:py-8">
+        <WelcomeBanner />
 
-      {/* Feature grid */}
-      <section className="container mx-auto max-w-6xl px-6 pb-24">
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          {features.map((f) => (
-            <div key={f.title} className="glass glass-hover p-6">
-              <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400/20 to-purple-500/20 text-cyan-300">
-                <f.icon size={20} />
-              </div>
-              <h3 className="mb-1 font-semibold">{f.title}</h3>
-              <p className="text-sm text-slate-400">{f.desc}</p>
-            </div>
-          ))}
+          <StatCard icon={ServerIcon} label="Total Server" value={stats?.servers.total ?? 0} tone="cyan" live />
+          <StatCard icon={Activity}   label="Online"       value={stats?.servers.online ?? 0} tone="emerald" live />
+          <StatCard icon={Wifi}       label="Full Slot"    value={stats?.servers.full ?? 0} tone="yellow" />
+          <StatCard
+            icon={Users}
+            label="Active Connections"
+            value={stats?.connections.active ?? 0}
+            sub={stats?.connections.capacity ? `dari ${stats.connections.capacity.toLocaleString()} kapasitas slot` : undefined}
+            tone="purple"
+            live
+          />
         </div>
-      </section>
 
-      <footer className="container mx-auto max-w-6xl border-t border-white/5 px-6 py-8 text-center text-xs text-slate-500">
-        © {new Date().getFullYear()} Agunk Monitor — Built for premium VPN/Xray operators.
-      </footer>
-    </main>
+        <div className="glass flex flex-col gap-3 p-4 md:flex-row md:items-center">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Cari server, lokasi, provider..."
+              className="input pl-9"
+            />
+          </div>
+          <select className="input md:w-48" value={country} onChange={(e) => setCountry(e.target.value)}>
+            <option value="ALL">Semua negara</option>
+            {countries.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select className="input md:w-48" value={provider} onChange={(e) => setProvider(e.target.value)}>
+            <option value="ALL">Semua provider</option>
+            {providers.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+
+        {loading && !servers ? (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-56" />)}
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="glass grid place-items-center p-16 text-center">
+            <Globe className="mb-3 text-slate-500" size={32} />
+            <div className="font-medium">Tidak ada server cocok</div>
+            <p className="mt-1 text-sm text-slate-400">Coba ubah filter atau kata kunci pencarian.</p>
+          </div>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {filtered.map((s) => (
+              <ServerCard key={s.id} server={s} href={`/servers/${s.id}`} />
+            ))}
+          </div>
+        )}
+
+        <footer className="border-t border-white/5 pt-6 text-center text-xs text-slate-500">
+          © {new Date().getFullYear()} {BRAND} — Built by {AUTHOR}.
+        </footer>
+      </main>
+    </div>
   );
 }
-
-const features = [
-  { icon: Activity,   title: "Realtime Health",  desc: "CPU, RAM, ping, dan traffic RX/TX update otomatis tiap beberapa detik." },
-  { icon: Server,     title: "Multi-Server",     desc: "Tambah server VPS sebanyak yang Anda mau. Skala scalable tanpa batas." },
-  { icon: Globe2,     title: "Per-Country View", desc: "Filter cepat berdasarkan negara, provider VPS, atau status server." },
-  { icon: Zap,        title: "Auto Status",      desc: "Status FULL / WARNING / OFFLINE dihitung otomatis dari user aktif." },
-];

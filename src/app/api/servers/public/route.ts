@@ -2,23 +2,18 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { serializeServers } from "@/lib/serialize";
 import { sanitizeDomain } from "@/lib/sanitize";
-import { requireUser } from "@/lib/guards";
 
-// Public-ish: returns sanitized server data for member dashboard.
-// Requires login (any role) — credentials/api keys are NEVER returned.
-// Domain is sanitized: private/internal IPs are masked.
-
+/**
+ * Public, sanitized server list. No auth required.
+ * - apiUrl, apiKey, lastError, refreshMs are NEVER selected
+ * - private/internal IPs in `domain` are masked
+ */
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const auth = await requireUser();
-  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
-
   const servers = await prisma.server.findMany({
     where: { enabled: true },
     orderBy: [{ status: "asc" }, { name: "asc" }],
-    // SECURITY: Only select fields safe for member consumption.
-    // NEVER select: apiUrl, apiKey, lastError (may contain internal info)
     select: {
       id: true, name: true, domain: true, country: true, countryName: true,
       flag: true, provider: true, maxSlot: true, status: true, activeUsers: true,
@@ -29,7 +24,6 @@ export async function GET() {
     },
   });
 
-  // Sanitize: mask private/internal IPs, strip anything sensitive from domain field
   const sanitized = serializeServers(servers).map((s) => ({
     ...s,
     domain: sanitizeDomain(s.domain),

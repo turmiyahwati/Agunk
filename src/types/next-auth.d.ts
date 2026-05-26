@@ -1,4 +1,3 @@
-import type { Role } from "@/lib/enums";
 import "next-auth";
 
 declare module "next-auth" {
@@ -7,7 +6,6 @@ declare module "next-auth" {
       id: string;
       name?: string | null;
       email?: string | null;
-      role: Role;
     };
   }
 }
@@ -15,6 +13,5 @@ declare module "next-auth" {
 declare module "next-auth/jwt" {
   interface JWT {
     id: string;
-    role: Role;
   }
 }

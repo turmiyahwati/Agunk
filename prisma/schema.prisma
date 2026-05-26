@@ -1,6 +1,6 @@
-// Prisma schema for Agunk - VPN/Xray Monitor
-// Default: SQLite for fast local dev. Switch provider to "postgresql" for production
-// (no other code change needed; enums are stored as plain strings).
+// Prisma schema for PT Sontoloyo Monitor — VPN/Xray monitoring panel.
+// Default: SQLite for fast local dev. Switch provider to "postgresql"
+// for production (no other code change needed).
 
 generator client {
   provider = "prisma-client-js"
@@ -11,19 +11,20 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// NOTE: SQLite does not support native enums, so we store the enum-like
+// NOTE: SQLite does not support native enums, so we store enum-like
 // fields as String. The application validates them via TypeScript types
 // (see `src/lib/enums.ts`) and Zod schemas in API routes.
 //
-//   role:   "ADMIN" | "MEMBER"
 //   status: "ONLINE" | "OFFLINE" | "FULL" | "WARNING" | "UNKNOWN"
+//
+// The User model only stores ADMIN accounts. Public visitors do not
+// require a session — monitoring is open. Login is admin-only.
 
 model User {
   id        String   @id @default(cuid())
   name      String
   email     String   @unique
   password  String
-  role      String   @default("MEMBER")
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -32,18 +33,17 @@ model User {
 model Server {
   id          String   @id @default(cuid())
   name        String
-  domain      String   // domain or IP
+  domain      String
   country     String   @default("ID")
   countryName String   @default("Indonesia")
-  flag        String?  // url to flag image (optional override)
+  flag        String?
   provider    String   @default("Unknown")
-  apiUrl      String?  // base URL of the VPS agent, e.g. http://1.2.3.4:8787
-  apiKey      String?  // API key for the VPS agent
+  apiUrl      String?
+  apiKey      String?
   enabled     Boolean  @default(true)
   refreshMs   Int      @default(10000)
   maxSlot     Int      @default(100)
 
-  // Last fetched / manually entered metrics (denormalized for quick read)
   status       String   @default("UNKNOWN")
   activeUsers  Int      @default(0)
   pingMs       Int      @default(0)

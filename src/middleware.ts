@@ -1,14 +1,12 @@
 import { withAuth } from "next-auth/middleware";
-import { NextResponse } from "next/server";
 
+/**
+ * Only /admin/* requires authentication. The public monitoring routes
+ * (/, /servers/[id]) are intentionally open.
+ */
 export default withAuth(
-  function middleware(req) {
-    const role = (req.nextauth.token as any)?.role;
-    const { pathname } = req.nextUrl;
-    if (pathname.startsWith("/admin") && role !== "ADMIN") {
-      return NextResponse.redirect(new URL("/dashboard", req.url));
-    }
-    return NextResponse.next();
+  function middleware() {
+    // No-op: presence of token (validated below) is enough.
   },
   {
     callbacks: {
@@ -18,5 +16,5 @@ export default withAuth(
 );
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/admin/:path*"],
+  matcher: ["/admin/:path*"],
 };

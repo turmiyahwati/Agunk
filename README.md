@@ -1,24 +1,26 @@
-# Agunk — Premium VPN/Xray Monitoring Dashboard
+# PT Sontoloyo Monitor
 
-Modern, real-time monitoring panel for VPN/Xray VPS fleets. Futuristic dark UI
-with neon glassmorphism. Built with **Next.js 14**, **Prisma**, **NextAuth (JWT)**,
-**TailwindCSS**, **Framer Motion**, **Recharts**, and a tiny **Python FastAPI agent**
-for the VPS side.
+> Premium realtime VPN/Xray server monitoring dashboard.
+> **Author / Developer:** Pakde Xresx Digital Store.
 
-> Two roles only: **ADMIN** (full CRUD) and **MEMBER** (view-only).
-> No reseller, no auto-create accounts, no config selling — pure monitoring.
+A modern, public-by-default monitoring panel with futuristic neon glassmorphism UI.
+Visitors see realtime server status without login. Only the **admin** logs in to manage
+servers and sync data from the lightweight Python agent that runs on each VPS.
+
+**Stack:** Next.js 14 · Prisma · NextAuth (JWT) · TailwindCSS · Framer Motion · Recharts · FastAPI agent.
+
+> Single-role: only **ADMIN**. No member registration. No reseller. Just monitoring.
 
 ---
 
 ## Features
 
-- 🟢 Realtime polling of every VPS through a small agent (`/api/status`)
-- 🌐 Multi-server, multi-country, multi-provider grid
-- 📊 Per-server detail with live charts (Recharts), CPU/RAM/ping/traffic
+- 🌐 Public realtime monitoring at `/` — no login required
+- 📈 Per-server detail with live charts (CPU, RAM, ping, traffic, slot)
 - 🚦 Auto status: `ONLINE`, `WARNING` (≥90% slot), `FULL`, `OFFLINE`
-- 🛡️ Secure: NextAuth (JWT credentials) + role middleware + per-server API key
-- 🪟 Glassmorphism, neon glow, animated cards, mobile responsive
-- 🛠️ Admin: CRUD servers (name/location/provider/slot/etc), CRUD members, manual sync, test-connection
+- 🛠️ Admin: CRUD servers, manual sync, test agent connection
+- 🔐 NextAuth credentials with anti-bruteforce + secure headers + sanitized responses
+- 🪟 Glassmorphism, neon glow, animated counters — fully mobile responsive
 - 🐧 One-line Debian/Ubuntu installer for the VPS agent
 
 ---
@@ -26,35 +28,35 @@ for the VPS side.
 ## Project structure
 
 ```
-Agunk/
+sontoloyo-monitor/
 ├─ prisma/
-│  ├─ schema.prisma          # User, Server, ServerMetric (SQLite default; switch to postgres easily)
-│  └─ seed.ts                # Default admin + demo member + demo servers
+│  ├─ schema.prisma          # User (admin only), Server, ServerMetric
+│  └─ seed.ts                # Default admin + demo servers
 ├─ scripts/
 │  └─ sync-once.ts           # Trigger sync from cron (tsx scripts/sync-once.ts)
 ├─ src/
 │  ├─ app/
-│  │  ├─ page.tsx                        # Landing
-│  │  ├─ login/   register/   post-login # Auth pages
-│  │  ├─ dashboard/                      # MEMBER (view-only)
-│  │  │   ├─ page.tsx                    # Overview + filter + search
-│  │  │   └─ servers/[id]/page.tsx       # Detail w/ live chart
+│  │  ├─ page.tsx                        # Public monitoring (homepage)
+│  │  ├─ servers/[id]/page.tsx           # Public server detail
+│  │  ├─ login/page.tsx                  # Admin login
 │  │  ├─ admin/                          # ADMIN
 │  │  │   ├─ page.tsx                    # Stats + live grid
 │  │  │   ├─ servers/page.tsx            # CRUD + test API
-│  │  │   ├─ members/page.tsx            # CRUD users
 │  │  │   └─ settings/page.tsx
-│  │  └─ api/                            # Auth, register, stats, servers, members, monitor sync
-│  ├─ components/             # Sidebar, Topbar, ServerCard, StatCard, ui/*
+│  │  └─ api/                            # Auth, stats, servers, monitor sync
+│  ├─ components/             # PublicHeader, ContactBar, WelcomeBanner,
+│  │                          # Sidebar, Topbar, ServerCard, StatCard,
+│  │                          # AnimatedNumber, ui/*
 │  ├─ hooks/useServers.ts     # polling for /api/servers/public
-│  ├─ lib/                    # prisma, auth, guards, monitor, utils, serialize
-│  └─ middleware.ts           # gates /admin (ADMIN) and /dashboard (any user)
+│  ├─ lib/                    # prisma, auth, guards, monitor, utils,
+│  │                          # serialize, sanitize, rate-limit, api-error
+│  └─ middleware.ts           # gates only /admin/*
 ├─ vps-agent/                 # ──── runs on each VPN/Xray VPS ────
-│  ├─ agunk_agent.py          # FastAPI app exposing /api/status
+│  ├─ sontoloyo_agent.py      # FastAPI app exposing /api/status
 │  ├─ requirements.txt
 │  ├─ install.sh              # one-shot Debian/Ubuntu installer
 │  ├─ uninstall.sh
-│  ├─ agunk-agent.service     # systemd unit
+│  ├─ sontoloyo-agent.service # systemd unit
 │  └─ README.md
 ├─ .env.example
 └─ package.json
@@ -62,31 +64,31 @@ Agunk/
 
 ---
 
-## 1) Install (local development)
+## 1) Local development
 
 Prerequisites: **Node.js 20+** and **npm** (or pnpm/yarn).
 
 ```bash
-git clone https://github.com/<you>/Agunk.git
-cd Agunk
+git clone <your-repo-url>.git sontoloyo-monitor
+cd sontoloyo-monitor
 
 cp .env.example .env
 # Edit .env — at minimum set NEXTAUTH_SECRET and ADMIN_EMAIL/PASSWORD
+# Optional: NEXT_PUBLIC_WHATSAPP_NUMBER for the contact button
 
 npm install
 npx prisma generate
 npx prisma db push        # creates dev.db (SQLite)
-npm run db:seed           # creates default admin + demo data
+npm run db:seed           # creates the default admin + demo data
 
 npm run dev               # http://localhost:3000
 ```
 
-Default credentials (from `.env`):
+Default admin (from `.env`):
 
-| Role   | Email                | Password   |
-| ------ | -------------------- | ---------- |
-| Admin  | `admin@agunk.local`  | `admin123` |
-| Member | `member@agunk.local` | `member123`|
+| Email                    | Password   |
+| ------------------------ | ---------- |
+| `admin@sontoloyo.local`  | `admin123` |
 
 Switch to PostgreSQL: edit `prisma/schema.prisma` provider to `"postgresql"`,
 update `DATABASE_URL`, then `npx prisma db push`.
@@ -101,22 +103,22 @@ update `DATABASE_URL`, then `npx prisma db push`.
    - **VPS Agent base URL** (e.g. `http://1.2.3.4:8787`)
    - **API Key** (the one printed by the installer)
 3. Click the **Wifi** icon on that row to test the connection.
-4. The dashboard will auto-poll and surface live data to MEMBERs.
+4. The dashboard will auto-poll and surface live data on the public homepage.
 
 ---
 
 ## 3) Realtime sync
 
-The website re-polls `/api/servers/public` every `NEXT_PUBLIC_REFRESH_MS` ms (default `10000`).
-Behind the scenes, that data is refreshed by the **monitor sync** job which contacts each
-agent. Run it any of these ways:
+The dashboard re-polls `/api/servers/public` every `NEXT_PUBLIC_REFRESH_MS` ms (default `10000`).
+Behind the scenes, that data is refreshed by the **monitor sync** job which contacts each agent.
+Run it any of these ways:
 
 **A. Click "Sync now" in the admin Topbar** — triggers `POST /api/monitor/sync` (admin only).
 
 **B. External cron with token** (recommended for prod):
 
 ```bash
-# /etc/cron.d/agunk-sync — runs every minute
+# /etc/cron.d/sontoloyo-sync — runs every minute
 * * * * * root curl -fsS -H "X-Sync-Token: $MONITOR_SYNC_TOKEN" \
   -X POST https://your-domain.com/api/monitor/sync >/dev/null
 ```
@@ -139,17 +141,17 @@ Auto-status rules (no config required):
 ```bash
 # on the VPS:
 sudo apt-get update -y
-git clone https://github.com/<you>/Agunk.git /tmp/agunk
-cd /tmp/agunk/vps-agent
+git clone <your-repo-url>.git /tmp/sontoloyo
+cd /tmp/sontoloyo/vps-agent
 
 # Generates a strong API key automatically if not provided:
 sudo bash install.sh
 ```
 
 What the installer does:
-- creates `/opt/agunk-agent` + Python venv with `fastapi`, `uvicorn`, `psutil`
-- writes `/etc/agunk-agent.env` with the API key (chmod 600)
-- installs and starts `systemctl status agunk-agent`
+- creates `/opt/sontoloyo-agent` + Python venv with `fastapi`, `uvicorn`, `psutil`
+- writes `/etc/sontoloyo-agent.env` with the API key (chmod 600)
+- installs and starts `systemctl status sontoloyo-agent`
 - opens UFW port `8787/tcp` if `ufw` is installed
 
 Test:
@@ -158,7 +160,7 @@ curl http://127.0.0.1:8787/health
 curl -H "X-API-Key: <key>" http://127.0.0.1:8787/api/status
 ```
 
-JSON shape returned by `/api/status` (consumed by Agunk):
+JSON shape returned by `/api/status`:
 
 ```json
 {
@@ -172,20 +174,20 @@ JSON shape returned by `/api/status` (consumed by Agunk):
 }
 ```
 
-The agent auto-restarts via systemd. Logs: `journalctl -u agunk-agent -f`.
+The agent auto-restarts via systemd. Logs: `journalctl -u sontoloyo-agent -f`.
 
 For more (rotating keys, firewall, nginx + TLS), see [`vps-agent/README.md`](./vps-agent/README.md).
 
 ---
 
-## 5) Deploy the website (production)
+## 5) Deploy the dashboard (production)
 
 ### Option A — VPS with PM2 + Nginx
 
 ```bash
 # on the dashboard VPS:
-git clone https://github.com/<you>/Agunk.git
-cd Agunk
+git clone <your-repo-url>.git
+cd sontoloyo-monitor
 cp .env.example .env   # set DATABASE_URL=postgresql://..., NEXTAUTH_URL=https://your-domain
 npm ci
 npm run build           # runs `prisma generate && next build`
@@ -194,11 +196,11 @@ npm run db:seed         # only the first time
 
 # run with pm2:
 npm i -g pm2
-pm2 start "npm run start" --name agunk -- -p 3000
+pm2 start "npm run start" --name sontoloyo -- -p 3000
 pm2 save && pm2 startup
 ```
 
-Then put nginx in front (reverse proxy 80/443 → 127.0.0.1:3000) and add Let's Encrypt:
+Nginx reverse proxy:
 
 ```nginx
 server {
@@ -218,57 +220,69 @@ Just push to a Git provider and import. Use **PostgreSQL** (Neon, Supabase, Rail
 Set the same env vars as `.env.example`. No special build step required —
 `npm run build` runs `prisma generate && next build`.
 
+### Option C — Hosting panel (cPanel, Plesk, aaPanel)
+
+1. Upload the repo to your home directory.
+2. Open the panel's Node.js app manager and create a new app pointing to the project root.
+3. Set **start command**: `npm run start`, **dev script**: `npm run build`.
+4. Add env vars from `.env.example`.
+5. Run `npm install`, then `npx prisma generate && npx prisma db push && npm run db:seed`.
+6. Reverse-proxy your domain to the app's port.
+
 ---
 
 ## 6) Environment variables
 
 See [`.env.example`](./.env.example). Highlights:
 
-| Var                       | Purpose                                                       |
-| ------------------------- | ------------------------------------------------------------- |
-| `DATABASE_URL`            | SQLite or Postgres connection string                           |
-| `NEXTAUTH_SECRET`         | JWT secret (`openssl rand -base64 32`)                         |
-| `NEXTAUTH_URL`            | Public URL of the dashboard                                    |
-| `ADMIN_EMAIL/PASSWORD`    | Used by `npm run db:seed` to provision the first admin         |
-| `MONITOR_SYNC_TOKEN`      | Allows external cron to call `/api/monitor/sync`               |
-| `NEXT_PUBLIC_REFRESH_MS`  | Frontend polling interval                                      |
-| `VPS_FETCH_TIMEOUT_MS`    | Per-agent fetch timeout                                        |
-| `VPS_FETCH_RETRIES`       | Retry attempts on agent timeout                                |
+| Var                              | Purpose                                                       |
+| -------------------------------- | ------------------------------------------------------------- |
+| `DATABASE_URL`                   | SQLite or Postgres connection string                          |
+| `NEXTAUTH_SECRET`                | JWT secret (`openssl rand -base64 32`)                        |
+| `NEXTAUTH_URL`                   | Public URL of the dashboard                                   |
+| `ADMIN_EMAIL/PASSWORD`           | Used by `npm run db:seed` to provision the first admin        |
+| `MONITOR_SYNC_TOKEN`             | Allows external cron to call `/api/monitor/sync`              |
+| `NEXT_PUBLIC_REFRESH_MS`         | Frontend polling interval                                     |
+| `VPS_FETCH_TIMEOUT_MS`           | Per-agent fetch timeout                                       |
+| `VPS_FETCH_RETRIES`              | Retry attempts on agent timeout                               |
+| `NEXT_PUBLIC_BRAND_NAME`         | Brand name shown in header / metadata                         |
+| `NEXT_PUBLIC_BRAND_SUFFIX`       | Brand suffix (e.g. "Monitor")                                 |
+| `NEXT_PUBLIC_AUTHOR`             | Author shown in footer                                        |
+| `NEXT_PUBLIC_WHATSAPP_NUMBER`    | International format (e.g. 6281234567890). Empty → hide btn   |
+| `NEXT_PUBLIC_WHATSAPP_TEXT`      | Pre-filled WhatsApp message                                   |
 
 ---
 
-## 7) API endpoints (website)
+## 7) API endpoints
 
-> All write endpoints require `ADMIN`. Member-safe read = `/api/servers/public`.
+> Public endpoints are open. Admin endpoints require a NextAuth session.
 
 | Method | Path                          | Auth              | Notes                              |
 | ------ | ----------------------------- | ----------------- | ---------------------------------- |
-| POST   | `/api/register`               | public            | Create MEMBER account              |
-| GET    | `/api/servers/public`         | any session       | Sanitized list (no api keys)       |
-| GET    | `/api/stats`                  | any session       | Aggregate counters                 |
+| GET    | `/api/servers/public`         | **public**        | Sanitized list (no api keys)       |
+| GET    | `/api/stats`                  | **public**        | Aggregate counters                 |
+| GET    | `/api/servers/:id/metrics`    | **public**        | Recent metrics (chart)             |
 | GET/POST | `/api/servers`              | ADMIN             | List / create                      |
 | GET/PATCH/DELETE | `/api/servers/:id`  | ADMIN             | Read / update / delete             |
 | POST   | `/api/servers/:id/test`       | ADMIN             | Test agent connection + sync       |
-| GET    | `/api/servers/:id/metrics`    | any session       | Recent metrics for chart           |
-| GET/POST | `/api/members`              | ADMIN             | List / create user                 |
-| PATCH/DELETE | `/api/members/:id`      | ADMIN             | Update / delete user               |
 | POST   | `/api/monitor/sync`           | ADMIN or token    | Trigger sync of all enabled agents |
 
 ---
 
 ## 8) Security checklist
 
-- ✅ Passwords are bcrypt-hashed (`bcryptjs`).
-- ✅ Sessions use JWT (NextAuth strategy = `jwt`).
-- ✅ Middleware blocks `/admin/**` for non-admin users.
-- ✅ The agent API key never leaves the server — it is stored on the dashboard
-  and used only by `lib/monitor.ts` server-side.
-- ✅ All admin routes validate role via `requireAdmin()`.
-- ⚠️ Set strong `NEXTAUTH_SECRET`, `MONITOR_SYNC_TOKEN`, and `AGUNK_API_KEY`.
-- ⚠️ Put the agent behind UFW or a private network if possible.
+- ✅ Single-role architecture — only `ADMIN` accounts in the DB.
+- ✅ Public monitoring uses Prisma `select` whitelists (no `apiKey`/`apiUrl`/`lastError` ever sent).
+- ✅ Private/internal IPs in `domain` are masked via `lib/sanitize.ts`.
+- ✅ NextAuth (JWT) with anti-bruteforce: 5 failed attempts per email per 60s.
+- ✅ Middleware blocks `/admin/**` for non-authenticated users.
+- ✅ Secure HTTP headers (HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, CSP).
+- ✅ `safeErrorMessage()` prevents stack-trace / Prisma error leaks.
+- ⚠️ **Always set** strong `NEXTAUTH_SECRET`, `MONITOR_SYNC_TOKEN`, and `SONTOLOYO_API_KEY`.
+- ⚠️ Put each VPS agent behind UFW or a private network when possible.
 
 ---
 
 ## License
 
-MIT — use, modify, and ship freely. Have fun building, fam. ✌️
+MIT — © Pakde Xresx Digital Store.

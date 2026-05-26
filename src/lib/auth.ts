@@ -4,9 +4,9 @@ import bcrypt from "bcryptjs";
 import { prisma } from "./prisma";
 
 /**
- * In-memory login attempt tracker for anti-bruteforce.
- * 5 failed attempts per email within 60s → temporary lockout.
- * This runs server-side only.
+ * Admin-only authentication.
+ * In-memory anti-bruteforce: 5 failed attempts per email within 60s
+ * triggers a soft lockout (silent reject — no info leak).
  */
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 const MAX_FAILED = 5;
@@ -15,9 +15,7 @@ const WINDOW_MS = 60_000;
 function checkLoginThrottle(email: string): boolean {
   const now = Date.now();
   const entry = loginAttempts.get(email);
-  if (!entry || now > entry.resetAt) {
-    return true; // allowed
-  }
+  if (!entry || now > entry.resetAt) return true;
   return entry.count < MAX_FAILED;
 }
 
@@ -29,7 +27,6 @@ function recordFailedLogin(email: string): void {
   } else {
     entry.count += 1;
   }
-  // Periodic cleanup
   if (loginAttempts.size > 1000) {
     for (const [key, val] of loginAttempts.entries()) {
       if (now > val.resetAt) loginAttempts.delete(key);
@@ -56,9 +53,8 @@ export const authOptions: NextAuthOptions = {
 
         const email = creds.email.toLowerCase().trim();
 
-        // Anti-bruteforce: check if this email is temporarily locked
         if (!checkLoginThrottle(email)) {
-          return null; // silently reject — no info leak about lockout reason
+          return null;
         }
 
         const user = await prisma.user.findUnique({ where: { email } });
@@ -73,9 +69,9 @@ export const authOptions: NextAuthOptions = {
           return null;
         }
 
-        // Success — clear failed attempts
         clearLoginAttempts(email);
-        return { id: user.id, email: user.email, name: user.name, role: user.role } as any;
+        // Every authenticated user IS an admin. No role field anymore.
+        return { id: user.id, email: user.email, name: user.name } as any;
       },
     }),
   ],
@@ -83,14 +79,12 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user }) {
       if (user) {
         token.id = (user as any).id;
-        token.role = (user as any).role;
       }
       return token;
     },
     async session({ session, token }) {
       if (session.user) {
         (session.user as any).id = token.id;
-        (session.user as any).role = token.role;
       }
       return session;
     },

@@ -2,11 +2,24 @@ import "./globals.css";
 import type { Metadata, Viewport } from "next";
 import { Providers } from "@/components/Providers";
 
+const BRAND = process.env.NEXT_PUBLIC_BRAND_NAME || "PT Sontoloyo";
+const SUFFIX = process.env.NEXT_PUBLIC_BRAND_SUFFIX || "Monitor";
+const AUTHOR = process.env.NEXT_PUBLIC_AUTHOR || "Pakde Xresx Digital Store";
+
 export const metadata: Metadata = {
-  title: "Agunk — VPN / Xray Monitoring",
-  description:
-    "Premium real-time VPN & Xray server monitoring dashboard with futuristic glassmorphism UI.",
+  title: `${BRAND} ${SUFFIX} — VPN / Xray Realtime`,
+  description: `${BRAND} ${SUFFIX} — premium realtime VPN & Xray server monitoring panel oleh ${AUTHOR}.`,
+  authors: [{ name: AUTHOR }],
+  applicationName: `${BRAND} ${SUFFIX}`,
+  generator: BRAND,
+  keywords: ["vpn monitoring", "xray monitoring", "server status", "realtime panel"],
+  robots: { index: true, follow: true },
   icons: { icon: "/favicon.svg" },
+  openGraph: {
+    title: `${BRAND} ${SUFFIX}`,
+    description: "Realtime VPN/Xray monitoring panel",
+    type: "website",
+  },
 };
 
 export const viewport: Viewport = {
@@ -17,7 +30,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className="dark">
+    <html lang="id" className="dark">
       <body>
         <Providers>{children}</Providers>
       </body>

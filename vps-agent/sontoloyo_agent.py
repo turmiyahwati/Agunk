@@ -1,21 +1,31 @@
 """
-Agunk VPS Agent — minimal monitoring API for VPN/Xray nodes.
+PT Sontoloyo Monitor — VPS Agent
+================================
 
-Runs on the VPS (Debian/Ubuntu). Exposes a small HTTP API that the Agunk
-website polls. All endpoints (except /health) require an X-API-Key header.
+Lightweight FastAPI agent that runs on each monitored VPN/Xray VPS and
+exposes a minimal HTTP API consumed by the PT Sontoloyo Monitor dashboard.
 
-JSON shape returned by /api/status (consumed by Agunk):
+Author: Pakde Xresx Digital Store
+
+HTTP API (UNCHANGED — stable contract):
+    GET /health                   public, no auth
+    GET /api/status               requires X-API-Key header
+    GET /api/system               requires X-API-Key header
+    GET /api/traffic              requires X-API-Key header
+    GET /api/online               requires X-API-Key header
+
+JSON shape returned by /api/status:
 
 {
   "ok": true,
-  "uptime": 12345,            # seconds
-  "cpu": 24.1,                # percent
-  "ram": 41.2,                # percent
-  "ping": 14,                 # ms (gateway)
-  "speed": 940,               # rough Mb/s (NIC speed)
-  "rx": 12345678,             # bytes
-  "tx": 87654321,             # bytes
-  "active_users": 87,         # SSH + Xray online sessions
+  "uptime": 12345,            // seconds
+  "cpu": 24.1,                // percent
+  "ram": 41.2,                // percent
+  "ping": 14,                 // ms (gateway)
+  "speed": 940,               // rough Mb/s (NIC speed)
+  "rx": 12345678,             // bytes
+  "tx": 87654321,             // bytes
+  "active_users": 87,         // SSH + Xray online sessions
   "ssh": true, "xray": true, "nginx": true, "udp": false,
   "total_ssh": 120, "total_xray": 80
 }
@@ -32,11 +42,11 @@ from typing import Optional
 import psutil
 from fastapi import FastAPI, Header, HTTPException, status
 
-API_KEY = os.environ.get("AGUNK_API_KEY", "change-me")
-HOST = os.environ.get("AGUNK_HOST", "0.0.0.0")
-PORT = int(os.environ.get("AGUNK_PORT", "8787"))
+API_KEY = os.environ.get("SONTOLOYO_API_KEY", "change-me")
+HOST = os.environ.get("SONTOLOYO_HOST", "0.0.0.0")
+PORT = int(os.environ.get("SONTOLOYO_PORT", "8787"))
 
-app = FastAPI(title="Agunk VPS Agent", version="1.0.0")
+app = FastAPI(title="Sontoloyo VPS Agent", version="1.0.0")
 
 
 # ─────────────────────────── helpers ──────────────────────────────────────
@@ -57,7 +67,6 @@ def _service_active(name: str) -> bool:
 
 
 def _udp_active() -> bool:
-    # heuristic: any of these UDP services running?
     for n in ("udp-custom", "udp-mini", "badvpn-udpgw", "udp-zivpn"):
         if _service_active(n):
             return True
@@ -66,7 +75,6 @@ def _udp_active() -> bool:
 
 def _gateway_ping_ms() -> int:
     try:
-        # 1 packet, 1s deadline, ping the default gateway
         gw = subprocess.check_output(
             "ip route | awk '/default/ {print $3; exit}'",
             shell=True, text=True, timeout=2,
@@ -108,12 +116,10 @@ def _count_pattern(cmd: str) -> int:
 
 
 def _ssh_online() -> int:
-    # users connected via sshd
     return _count_pattern("ps -ef | grep -E 'sshd:.*@' | grep -v grep || true")
 
 
 def _xray_online() -> int:
-    # heuristic: count established connections to xray ports (handles common ports)
     return _count_pattern(
         "ss -tn state established '( sport = :443 or sport = :80 or sport = :8443 )' "
         "| tail -n +2 || true"
@@ -121,15 +127,13 @@ def _xray_online() -> int:
 
 
 def _total_ssh_accounts() -> int:
-    # Common convention on VPN scripts: usernames stored in /etc/agunk/ssh.users (or /etc/passwd by uid range)
-    f = "/etc/agunk/ssh.users"
+    f = "/etc/sontoloyo/ssh.users"
     if os.path.isfile(f):
         try:
             with open(f) as fp:
                 return sum(1 for ln in fp if ln.strip() and not ln.startswith("#"))
         except Exception:
             return 0
-    # fallback: count regular users with shell access (uid>=1000)
     try:
         n = 0
         with open("/etc/passwd") as fp:
@@ -147,8 +151,7 @@ def _total_ssh_accounts() -> int:
 
 
 def _total_xray_accounts() -> int:
-    # Convention: one line per account in /etc/agunk/xray.users  OR count "email" entries in xray config
-    f = "/etc/agunk/xray.users"
+    f = "/etc/sontoloyo/xray.users"
     if os.path.isfile(f):
         try:
             with open(f) as fp:
@@ -195,7 +198,6 @@ def status_endpoint(x_api_key: Optional[str] = Header(default=None, alias="X-API
     }
 
 
-# Optional granular endpoints (the website uses /api/status by default)
 @app.get("/api/system")
 def system(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
     _check_key(x_api_key)

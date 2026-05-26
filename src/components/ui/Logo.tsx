@@ -1,5 +1,8 @@
 import Link from "next/link";
 
+const BRAND = process.env.NEXT_PUBLIC_BRAND_NAME || "PT Sontoloyo";
+const SUBBRAND = process.env.NEXT_PUBLIC_BRAND_SUFFIX || "Monitor";
+
 export function Logo({ size = "md" }: { size?: "sm" | "md" | "lg" }) {
   const cls = size === "lg" ? "text-2xl" : size === "sm" ? "text-base" : "text-xl";
   return (
@@ -11,9 +14,9 @@ export function Logo({ size = "md" }: { size?: "sm" | "md" | "lg" }) {
         </svg>
       </div>
       <span className={`font-bold tracking-tight ${cls}`}>
-        <span className="neon-text">Agunk</span>
-        <span className="text-slate-400">·</span>
-        <span className="text-slate-300">Monitor</span>
+        <span className="neon-text">{BRAND}</span>
+        <span className="text-slate-400"> · </span>
+        <span className="text-slate-300">{SUBBRAND}</span>
       </span>
     </Link>
   );

@@ -1,0 +1,22 @@
+[Unit]
+Description=PT Sontoloyo Monitor — VPS Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/sontoloyo-agent.env
+WorkingDirectory=/opt/sontoloyo-agent
+ExecStart=/opt/sontoloyo-agent/.venv/bin/python -m uvicorn sontoloyo_agent:app --host ${SONTOLOYO_HOST} --port ${SONTOLOYO_PORT}
+Restart=always
+RestartSec=3
+User=root
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

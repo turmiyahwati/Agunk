@@ -1,8 +1,10 @@
 {
-  "name": "agunk",
-  "version": "0.1.0",
+  "name": "sontoloyo-monitor",
+  "version": "1.0.0",
   "private": true,
-  "description": "Agunk - Premium VPN/Xray Server Monitoring Dashboard",
+  "description": "PT Sontoloyo Monitor — premium realtime VPN/Xray server monitoring panel.",
+  "author": "Pakde Xresx Digital Store",
+  "license": "MIT",
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",

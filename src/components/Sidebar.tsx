@@ -3,18 +3,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Logo } from "./ui/Logo";
-import { LayoutDashboard, Server, Users, Settings } from "lucide-react";
+import { LayoutDashboard, Server, Settings } from "lucide-react";
 
 export type NavItem = { href: string; label: string; icon: React.ComponentType<any> };
-
-export const memberNav: NavItem[] = [
-  { href: "/dashboard",         label: "Overview",  icon: LayoutDashboard },
-];
 
 export const adminNav: NavItem[] = [
   { href: "/admin",          label: "Overview",  icon: LayoutDashboard },
   { href: "/admin/servers",  label: "Servers",   icon: Server },
-  { href: "/admin/members",  label: "Members",   icon: Users },
   { href: "/admin/settings", label: "Settings",  icon: Settings },
 ];
 
@@ -63,7 +58,7 @@ export function Sidebar({ items, open, onClose }: { items: NavItem[]; open?: boo
           })}
         </nav>
         <div className="mt-auto absolute bottom-4 left-4 right-4 rounded-xl border border-white/5 bg-white/[0.02] p-3 text-[11px] text-slate-500">
-          <div className="font-semibold text-slate-300">Agunk Monitor</div>
+          <div className="font-semibold text-slate-300">Sontoloyo Monitor</div>
           v1.0 · Realtime VPS health
         </div>
       </aside>
