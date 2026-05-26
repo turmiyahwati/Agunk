@@ -3,16 +3,17 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Logo } from "./ui/Logo";
-import { LayoutDashboard, Server, Settings, Image as ImageIcon, FileText } from "lucide-react";
+import { LayoutDashboard, Server, Settings, Image as ImageIcon, FileText, Layers } from "lucide-react";
 
 export type NavItem = { href: string; label: string; icon: React.ComponentType<any> };
 
 export const adminNav: NavItem[] = [
-  { href: "/admin",          label: "Overview",  icon: LayoutDashboard },
-  { href: "/admin/servers",  label: "Servers",   icon: Server },
-  { href: "/admin/branding", label: "Branding",  icon: ImageIcon },
-  { href: "/admin/homepage", label: "Homepage",  icon: FileText },
-  { href: "/admin/settings", label: "Settings",  icon: Settings },
+  { href: "/admin",           label: "Overview",  icon: LayoutDashboard },
+  { href: "/admin/servers",   label: "Servers",   icon: Server },
+  { href: "/admin/branding",  label: "Branding",  icon: ImageIcon },
+  { href: "/admin/homepage",  label: "Homepage",  icon: FileText },
+  { href: "/admin/protocols", label: "Protocols", icon: Layers },
+  { href: "/admin/settings",  label: "Settings",  icon: Settings },
 ];
 
 export function Sidebar({ items, open, onClose }: { items: NavItem[]; open?: boolean; onClose?: () => void }) {
