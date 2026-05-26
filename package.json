@@ -18,6 +18,7 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
     "db:reset": "prisma db push --force-reset && tsx prisma/seed.ts",
+    "db:backup": "node scripts/backup-db.mjs",
     "monitor:sync": "tsx scripts/sync-once.ts"
   },
   "dependencies": {

@@ -102,3 +102,30 @@ body::after {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+
+
+/* ───── Mobile experience: prevent horizontal overflow + better touch ─── */
+html, body { overflow-x: hidden; -webkit-text-size-adjust: 100%; }
+body { -webkit-tap-highlight-color: transparent; }
+img, svg, video { max-width: 100%; height: auto; }
+
+/* Slim down body grid + glow on tiny screens to keep paint cost low. */
+@media (max-width: 640px) {
+  body::before { background-size: 28px 28px; }
+}
+
+/* Respect users who prefer reduced motion: drop heavy animations entirely. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Focus ring polish for keyboard / mobile accessibility (color-matched). */
+:focus-visible {
+  outline: 2px solid rgba(34, 211, 238, 0.55);
+  outline-offset: 2px;
+}

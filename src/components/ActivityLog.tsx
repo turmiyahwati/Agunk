@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sparkles } from "lucide-react";
-import { timeAgo } from "@/lib/utils";
+import { shouldPoll, timeAgo } from "@/lib/utils";
 
 const REFRESH_MS = Number(process.env.NEXT_PUBLIC_REFRESH_MS || 10000);
 
@@ -23,12 +23,13 @@ const PROTOCOL_TONE: Record<Activity["protocol"], string> = {
 
 /**
  * Realtime feed of VPN account creation events.
- * Polls /api/activity at the same interval as the rest of the dashboard.
- * Renders only safe metadata (protocol + server name + relative time).
  *
- * Optional `refreshNonce` prop: bump it from the parent (e.g. from a
- * "Refresh Server" button) to force an immediate refetch without
- * waiting for the next polling tick.
+ * - Polls /api/activity every REFRESH_MS only while the tab is visible
+ *   (saves bandwidth and mobile battery).
+ * - Refetches immediately on visibility change so the feed feels fresh
+ *   when the user comes back.
+ * - Bumping the optional `refreshNonce` prop forces an immediate refetch
+ *   (used by the public "Refresh Server" button).
  */
 export function ActivityLog({ refreshNonce = 0 }: { refreshNonce?: number } = {}) {
   const [items, setItems] = useState<Activity[] | null>(null);
@@ -46,8 +47,21 @@ export function ActivityLog({ refreshNonce = 0 }: { refreshNonce?: number } = {}
 
   useEffect(() => {
     fetchOnce();
-    const t = setInterval(fetchOnce, REFRESH_MS);
-    return () => clearInterval(t);
+    const t = setInterval(() => {
+      if (shouldPoll()) fetchOnce();
+    }, REFRESH_MS);
+    const onVis = () => {
+      if (typeof document !== "undefined" && !document.hidden) fetchOnce();
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVis);
+    }
+    return () => {
+      clearInterval(t);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVis);
+      }
+    };
   }, [fetchOnce]);
 
   // External refresh trigger from the public page's "Refresh Server" button.

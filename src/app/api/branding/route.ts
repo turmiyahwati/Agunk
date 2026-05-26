@@ -3,6 +3,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { requireAdmin } from "@/lib/guards";
 import { safeErrorMessage } from "@/lib/api-error";
+import { enforceRateLimit, PUBLIC_API_LIMIT, WRITE_LIMIT } from "@/lib/rate-limit";
 import {
   getLogoUrl,
   setLogoUrl,
@@ -19,17 +20,17 @@ const UPLOAD_DIR_REL = "public/uploads";
 const PUBLIC_URL_PREFIX = "/uploads";
 
 /**
- * GET — public read of the current logo URL.
- * Returns: { logo: string | null }
+ * GET — public read of the current logo URL. Rate-limited per IP.
  */
-export async function GET() {
+export async function GET(req: Request) {
+  const limited = enforceRateLimit(req, PUBLIC_API_LIMIT);
+  if (limited) return limited;
+
   const url = await getLogoUrl();
   return NextResponse.json(
     { logo: url },
     {
       headers: {
-        // Browsers may cache briefly, but the URL itself is timestamped so
-        // a new upload is reflected immediately on next request.
         "Cache-Control": "no-cache",
       },
     },
@@ -40,15 +41,18 @@ export async function GET() {
  * POST — admin-only logo upload (multipart/form-data, field "file").
  *
  * Security:
- *   - admin session required
+ *   - admin session required + per-IP rate limit
  *   - validates the declared MIME type against an allowlist
  *   - re-validates via magic-byte sniff (defense-in-depth)
  *   - enforces a 1 MB size cap
  *   - filename is server-generated (logo-{epoch}.{ext}) — never trust input
- *   - file extension is derived from the verified MIME, not from the filename
+ *   - file extension is derived from the verified MIME, not the filename
  *   - old logo file is unlinked after a successful replacement
+ *   - path containment check: writes are constrained to public/uploads
  */
 export async function POST(req: Request) {
+  const limited = enforceRateLimit(req, WRITE_LIMIT);
+  if (limited) return limited;
   const auth = await requireAdmin();
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
@@ -80,7 +84,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "File content is not a valid image" }, { status: 400 });
     }
     if (sniffed !== file.type) {
-      // declared MIME mismatch with actual content — reject
       return NextResponse.json({ error: "File type mismatch" }, { status: 400 });
     }
 
@@ -91,7 +94,6 @@ export async function POST(req: Request) {
     await fs.mkdir(uploadDir, { recursive: true });
 
     const fullPath = path.join(uploadDir, filename);
-    // Final containment check: resolved path must be inside upload dir.
     const resolved = path.resolve(fullPath);
     if (!resolved.startsWith(path.resolve(uploadDir))) {
       return NextResponse.json({ error: "Invalid path" }, { status: 400 });
@@ -124,9 +126,10 @@ export async function POST(req: Request) {
 
 /**
  * DELETE — admin-only reset to default logo.
- * Removes the Setting row and unlinks the on-disk file.
  */
-export async function DELETE() {
+export async function DELETE(req: Request) {
+  const limited = enforceRateLimit(req, WRITE_LIMIT);
+  if (limited) return limited;
   const auth = await requireAdmin();
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
 

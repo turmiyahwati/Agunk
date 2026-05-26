@@ -9,6 +9,7 @@ import { PublicHeader } from "@/components/PublicHeader";
 import { WelcomeBanner } from "@/components/WelcomeBanner";
 import { ActivityLog } from "@/components/ActivityLog";
 import { ProtocolInfo } from "@/components/ProtocolInfo";
+import { shouldPoll } from "@/lib/utils";
 
 const BRAND = process.env.NEXT_PUBLIC_BRAND_NAME || "PT Sontoloyo";
 const AUTHOR = process.env.NEXT_PUBLIC_AUTHOR || "Pakde Xresx Digital Store";
@@ -32,7 +33,7 @@ export default function PublicMonitoring() {
   const [activityNonce, setActivityNonce] = useState(0);
   const cooldownUntilRef = useRef(0);
 
-  // Stats fetcher — reused by the polling effect AND the refresh button.
+  // Stats fetcher — reused by polling AND the refresh button.
   const fetchStats = useCallback(async () => {
     try {
       const res = await fetch("/api/stats", { cache: "no-store" });
@@ -41,11 +42,24 @@ export default function PublicMonitoring() {
     } catch {}
   }, []);
 
-  // Realtime stats polling
+  // Realtime stats polling — paused while tab is hidden, refetches on focus.
   useEffect(() => {
     fetchStats();
-    const t = setInterval(fetchStats, REFRESH_MS);
-    return () => clearInterval(t);
+    const t = setInterval(() => {
+      if (shouldPoll()) fetchStats();
+    }, REFRESH_MS);
+    const onVis = () => {
+      if (typeof document !== "undefined" && !document.hidden) fetchStats();
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVis);
+    }
+    return () => {
+      clearInterval(t);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVis);
+      }
+    };
   }, [fetchStats]);
 
   const handleManualRefresh = useCallback(async () => {
@@ -70,11 +84,13 @@ export default function PublicMonitoring() {
     [servers],
   );
 
+  // Domain is intentionally excluded from public search — visitors should not
+  // be able to enumerate hostnames / IPs from the search bar.
   const filtered = useMemo(() => {
     return (servers || []).filter((s) => {
       if (country !== "ALL" && s.countryName !== country) return false;
       if (provider !== "ALL" && s.provider !== provider) return false;
-      if (q && !`${s.name} ${s.domain} ${s.countryName} ${s.provider}`.toLowerCase().includes(q.toLowerCase()))
+      if (q && !`${s.name} ${s.countryName} ${s.provider}`.toLowerCase().includes(q.toLowerCase()))
         return false;
       return true;
     });
@@ -84,10 +100,10 @@ export default function PublicMonitoring() {
     <div className="min-h-screen">
       <PublicHeader />
 
-      <main className="container mx-auto max-w-7xl space-y-6 px-4 py-6 md:px-6 md:py-8">
+      <main className="container mx-auto max-w-7xl space-y-6 px-3 py-5 sm:px-4 md:px-6 md:py-8">
         <WelcomeBanner />
 
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <div className="grid gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           <StatCard icon={ServerIcon} label="Total Server" value={stats?.servers.total ?? 0} tone="cyan" live />
           <StatCard icon={Activity}   label="Online"       value={stats?.servers.online ?? 0} tone="emerald" live />
           <StatCard icon={Wifi}       label="Full Slot"    value={stats?.servers.full ?? 0} tone="yellow" />
@@ -102,7 +118,7 @@ export default function PublicMonitoring() {
           />
         </div>
 
-        <div className="glass flex flex-col gap-3 p-4 md:flex-row md:items-center">
+        <div className="glass flex flex-col gap-3 p-3 sm:p-4 md:flex-row md:items-center">
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
             <input
@@ -110,6 +126,9 @@ export default function PublicMonitoring() {
               onChange={(e) => setQ(e.target.value)}
               placeholder="Cari server, lokasi, provider..."
               className="input pl-9"
+              autoComplete="off"
+              spellCheck={false}
+              inputMode="search"
             />
           </div>
           <select className="input md:w-48" value={country} onChange={(e) => setCountry(e.target.value)}>
@@ -134,17 +153,17 @@ export default function PublicMonitoring() {
         </div>
 
         {loading && !servers ? (
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3">
             {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-56" />)}
           </div>
         ) : filtered.length === 0 ? (
-          <div className="glass grid place-items-center p-16 text-center">
+          <div className="glass grid place-items-center p-12 text-center sm:p-16">
             <Globe className="mb-3 text-slate-500" size={32} />
             <div className="font-medium">Tidak ada server cocok</div>
             <p className="mt-1 text-sm text-slate-400">Coba ubah filter atau kata kunci pencarian.</p>
           </div>
         ) : (
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3">
             {filtered.map((s) => (
               <ServerCard key={s.id} server={s} href={`/servers/${s.id}`} />
             ))}

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/guards";
 import { safeErrorMessage } from "@/lib/api-error";
+import { enforceRateLimit, PUBLIC_API_LIMIT, WRITE_LIMIT } from "@/lib/rate-limit";
 
 /**
  * Public read of recent VPN account creation events.
@@ -10,6 +11,8 @@ import { safeErrorMessage } from "@/lib/api-error";
  * Only safe metadata is exposed: protocol kind, server name, action,
  * and timestamp. Usernames, passwords, UUIDs, IPs, tokens, and any
  * other credential are NEVER stored in this table.
+ *
+ * Both endpoints are IP-rate-limited.
  */
 export const dynamic = "force-dynamic";
 
@@ -18,11 +21,14 @@ const ACTIONS = ["CREATE"] as const;
 
 const createSchema = z.object({
   protocol: z.enum(PROTOCOLS),
-  serverName: z.string().min(1).max(80),
+  serverName: z.string().trim().min(1).max(80),
   action: z.enum(ACTIONS).default("CREATE"),
 });
 
 export async function GET(req: Request) {
+  const limited = enforceRateLimit(req, PUBLIC_API_LIMIT);
+  if (limited) return limited;
+
   const url = new URL(req.url);
   const limit = Math.min(50, Math.max(1, Number(url.searchParams.get("limit") || 12)));
 
@@ -59,6 +65,8 @@ export async function GET(req: Request) {
  * + action; any other field in the body is ignored.
  */
 export async function POST(req: Request) {
+  const limited = enforceRateLimit(req, WRITE_LIMIT);
+  if (limited) return limited;
   const auth = await requireAdmin();
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
 

@@ -1,21 +1,31 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { serializeServers } from "@/lib/serialize";
-import { sanitizeDomain } from "@/lib/sanitize";
+import { enforceRateLimit, PUBLIC_API_LIMIT } from "@/lib/rate-limit";
 
 /**
  * Public, sanitized server list. No auth required.
- * - apiUrl, apiKey, lastError, refreshMs are NEVER selected
- * - private/internal IPs in `domain` are masked
+ *
+ * Security notes:
+ *  - Sensitive infrastructure fields (apiUrl, apiKey, lastError, refreshMs)
+ *    are NEVER selected from the database.
+ *  - The `domain` field is stripped to an empty string for the public
+ *    response so visitors can NOT enumerate the real hostname / IP /
+ *    panel URL of any monitored VPS. Admins still get the full record
+ *    via the authenticated /api/servers endpoint.
+ *  - Rate-limited per IP to prevent scraping / abuse.
  */
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: Request) {
+  const limited = enforceRateLimit(req, PUBLIC_API_LIMIT);
+  if (limited) return limited;
+
   const servers = await prisma.server.findMany({
     where: { enabled: true },
     orderBy: [{ status: "asc" }, { name: "asc" }],
     select: {
-      id: true, name: true, domain: true, country: true, countryName: true,
+      id: true, name: true, country: true, countryName: true,
       flag: true, provider: true, maxSlot: true, status: true, activeUsers: true,
       pingMs: true, speedMbps: true, rxBytes: true, txBytes: true, uptimeSec: true,
       cpuPercent: true, ramPercent: true, sshActive: true, xrayActive: true,
@@ -24,9 +34,12 @@ export async function GET() {
     },
   });
 
+  // Public payload never carries the real domain. Admins keep full visibility
+  // through the authenticated endpoint; the public detail page treats an
+  // empty `domain` string as "hidden" and skips rendering that line.
   const sanitized = serializeServers(servers).map((s) => ({
     ...s,
-    domain: sanitizeDomain(s.domain),
+    domain: "",
   }));
 
   return NextResponse.json({ servers: sanitized });

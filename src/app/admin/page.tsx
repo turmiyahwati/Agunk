@@ -5,6 +5,7 @@ import { StatCard } from "@/components/StatCard";
 import { useServers } from "@/hooks/useServers";
 import { ServerCard } from "@/components/ServerCard";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { shouldPoll } from "@/lib/utils";
 
 const REFRESH_MS = Number(process.env.NEXT_PUBLIC_REFRESH_MS || 8000);
 
@@ -26,8 +27,22 @@ export default function AdminOverview() {
       } catch {}
     };
     run();
-    const t = setInterval(run, REFRESH_MS);
-    return () => { alive = false; clearInterval(t); };
+    const t = setInterval(() => {
+      if (shouldPoll()) run();
+    }, REFRESH_MS);
+    const onVis = () => {
+      if (typeof document !== "undefined" && !document.hidden) run();
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVis);
+    }
+    return () => {
+      alive = false;
+      clearInterval(t);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVis);
+      }
+    };
   }, []);
 
   return (
@@ -39,7 +54,7 @@ export default function AdminOverview() {
         <p className="text-sm text-slate-400">Statistik realtime seluruh fleet VPN/Xray.</p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="grid gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <StatCard icon={ServerIcon}    label="Servers"             value={stats?.servers.total ?? 0}   tone="cyan"    live />
         <StatCard icon={Activity}      label="Online"              value={stats?.servers.online ?? 0}  tone="emerald" live />
         <StatCard icon={AlertTriangle} label="Warning"             value={stats?.servers.warning ?? 0} tone="yellow"  live />
@@ -58,11 +73,11 @@ export default function AdminOverview() {
       <div>
         <h2 className="mb-3 text-lg font-semibold">Live Server Grid</h2>
         {loading && !servers ? (
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3">
             {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-56" />)}
           </div>
         ) : (
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3">
             {(servers || []).map((s) => (
               <ServerCard key={s.id} server={s} href={`/admin/servers?focus=${s.id}`} />
             ))}

@@ -1,4 +1,5 @@
 "use client";
+import { memo } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
@@ -10,6 +11,11 @@ import { flagUrl, slotPercent, formatBytes, formatUptime } from "@/lib/utils";
 export type ServerSummary = {
   id: string;
   name: string;
+  /**
+   * Hostname / IP / panel URL of the server. The PUBLIC `/api/servers/public`
+   * endpoint returns this as an empty string for security — only the
+   * authenticated admin API exposes the real value.
+   */
   domain: string;
   country: string;
   countryName: string;
@@ -27,7 +33,7 @@ export type ServerSummary = {
   ramPercent?: number;
 };
 
-export function ServerCard({ server, href }: { server: ServerSummary; href?: string }) {
+function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string }) {
   const pct = slotPercent(server.activeUsers, server.maxSlot);
   return (
     <motion.div
@@ -88,3 +94,10 @@ function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; va
     </div>
   );
 }
+
+/**
+ * Memoized so the public homepage doesn't re-render every card when only
+ * the stats counter changes. Server objects are referentially stable
+ * across polls (the parent uses `useMemo` on `filtered`).
+ */
+export const ServerCard = memo(ServerCardImpl);

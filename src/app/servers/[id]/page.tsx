@@ -9,7 +9,7 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PublicHeader } from "@/components/PublicHeader";
-import { flagUrl, formatBytes, formatUptime, slotPercent } from "@/lib/utils";
+import { flagUrl, formatBytes, formatUptime, slotPercent, shouldPoll } from "@/lib/utils";
 import type { ServerSummary } from "@/components/ServerCard";
 
 const REFRESH_MS = Number(process.env.NEXT_PUBLIC_REFRESH_MS || 10000);
@@ -23,6 +23,18 @@ type MetricPoint = {
   ts: string;
   activeUsers: number; pingMs: number; cpuPercent: number; ramPercent: number;
 };
+
+/**
+ * Public detail page for a single server.
+ *
+ * The `domain` field is empty when the public API decides to hide the real
+ * hostname. We treat any falsy or already-masked value as "hidden" and skip
+ * rendering the Endpoint row entirely so visitors can not learn the real
+ * VPS address.
+ */
+function isDomainVisible(d: string | undefined | null): d is string {
+  return !!d && d !== "*.*.internal";
+}
 
 export default function PublicServerDetail() {
   const { id } = useParams<{ id: string }>();
@@ -44,17 +56,31 @@ export default function PublicServerDetail() {
       } catch {}
     }
     load();
-    const t = setInterval(load, REFRESH_MS);
-    return () => { alive = false; clearInterval(t); };
+    const t = setInterval(() => {
+      if (shouldPoll()) load();
+    }, REFRESH_MS);
+    const onVis = () => {
+      if (typeof document !== "undefined" && !document.hidden) load();
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVis);
+    }
+    return () => {
+      alive = false;
+      clearInterval(t);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVis);
+      }
+    };
   }, [id]);
 
   if (!server) {
     return (
       <div className="min-h-screen">
         <PublicHeader />
-        <main className="container mx-auto max-w-7xl space-y-4 px-4 py-6 md:px-6 md:py-8">
+        <main className="container mx-auto max-w-7xl space-y-4 px-3 py-5 sm:px-4 md:px-6 md:py-8">
           <Skeleton className="h-12 w-64" />
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-4">
             {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24" />)}
           </div>
           <Skeleton className="h-72" />
@@ -64,17 +90,18 @@ export default function PublicServerDetail() {
   }
 
   const pct = slotPercent(server.activeUsers, server.maxSlot);
+  const showDomain = isDomainVisible(server.domain);
 
   return (
     <div className="min-h-screen">
       <PublicHeader />
 
-      <main className="container mx-auto max-w-7xl space-y-6 px-4 py-6 md:px-6 md:py-8">
+      <main className="container mx-auto max-w-7xl space-y-5 px-3 py-5 sm:px-4 sm:space-y-6 md:px-6 md:py-8">
         <Link href="/" className="inline-flex items-center gap-1.5 text-sm text-slate-400 hover:text-cyan-300">
           <ArrowLeft size={14} /> Kembali ke daftar server
         </Link>
 
-        <div className="glass relative overflow-hidden p-6">
+        <div className="glass relative overflow-hidden p-5 sm:p-6">
           <div className="pointer-events-none absolute -top-20 -right-20 h-72 w-72 rounded-full bg-gradient-to-br from-cyan-400/15 to-purple-500/10 blur-3xl" />
           <div className="relative flex flex-wrap items-center gap-4">
             <div className="relative h-12 w-16 overflow-hidden rounded-md ring-1 ring-white/10">
@@ -84,7 +111,7 @@ export default function PublicServerDetail() {
               <h1 className="truncate text-2xl font-bold tracking-tight">{server.name}</h1>
               <div className="text-xs text-slate-400">
                 {server.countryName} · {server.provider}
-                {server.domain !== "*.*.internal" && (
+                {showDomain && (
                   <> · <span className="font-mono">{server.domain}</span></>
                 )}
               </div>
@@ -93,14 +120,14 @@ export default function PublicServerDetail() {
           </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-4">
           <Tile icon={Cpu}         label="CPU"   value={`${server.cpuPercent.toFixed(0)}%`} bar={server.cpuPercent} />
           <Tile icon={MemoryStick} label="RAM"   value={`${server.ramPercent.toFixed(0)}%`} bar={server.ramPercent} />
           <Tile icon={Wifi}        label="Ping"  value={server.pingMs ? `${server.pingMs} ms` : "—"} />
           <Tile icon={Activity}    label="Speed" value={server.speedMbps ? `${server.speedMbps} Mb/s` : "—"} />
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-3 sm:gap-4 md:grid-cols-3">
           <div className="glass p-5 md:col-span-2">
             <div className="mb-2 flex items-center justify-between">
               <h3 className="font-semibold">User Aktif (history)</h3>
@@ -137,8 +164,10 @@ export default function PublicServerDetail() {
           </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
-          <KV icon={<Globe size={14} />}    label="Endpoint" value={<span className="font-mono">{server.domain}</span>} />
+        <div className="grid gap-3 sm:gap-4 md:grid-cols-3">
+          {showDomain && (
+            <KV icon={<Globe size={14} />} label="Endpoint" value={<span className="font-mono">{server.domain}</span>} />
+          )}
           <KV icon={<Server size={14} />}   label="Uptime"   value={formatUptime(server.uptimeSec)} />
           <KV icon={<Activity size={14} />} label="Traffic"  value={`RX ${formatBytes(server.rxBytes)} · TX ${formatBytes(server.txBytes)}`} />
           <KV label="Provider" value={server.provider} />

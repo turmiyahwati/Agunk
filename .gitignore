@@ -37,3 +37,7 @@ __pycache__
 # user-uploaded logo files (keep the upload directory tracked via .gitkeep)
 public/uploads/*
 !public/uploads/.gitkeep
+
+
+# database backups produced by `npm run db:backup`
+backups/

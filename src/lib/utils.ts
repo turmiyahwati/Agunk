@@ -66,3 +66,15 @@ export function timeAgo(input: Date | string | number): string {
   const days = Math.floor(hours / 24);
   return `${days} hari lalu`;
 }
+
+/**
+ * Polling guard: returns true when the page is currently visible (or when
+ * running on the server / before hydration). Used to skip realtime fetches
+ * while the user has the tab in the background — saves CPU, network, and
+ * mobile battery without breaking the live feel (we refetch on visibility
+ * change anyway).
+ */
+export function shouldPoll(): boolean {
+  if (typeof document === "undefined") return true;
+  return !document.hidden;
+}

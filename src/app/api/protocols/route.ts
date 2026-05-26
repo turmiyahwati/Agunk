@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/guards";
 import { safeErrorMessage } from "@/lib/api-error";
+import { enforceRateLimit, PUBLIC_API_LIMIT, WRITE_LIMIT } from "@/lib/rate-limit";
 import {
   PROTOCOL_SLUGS,
   getProtocols,
@@ -11,8 +12,8 @@ import {
 
 /**
  * Public read of the editable Protocol Information cards.
- * PATCH (admin) replaces the full ordered list. GET is open — the
- * homepage is public.
+ * PATCH (admin) replaces the full ordered list. Both endpoints are
+ * IP-rate-limited.
  */
 export const dynamic = "force-dynamic";
 
@@ -24,9 +25,6 @@ const itemSchema = z.object({
   bullet2: z.string().trim().max(150).default(""),
   active: z.boolean(),
 
-  // New fields driving the redesigned card. All optional with sensible
-  // empty defaults so older clients posting just the legacy fields keep
-  // working — server merges with stored values via the lib helpers.
   subtitle: z.string().trim().max(200).default(""),
   body: z.string().trim().max(800).default(""),
   feature1Label: z.string().trim().max(50).default(""),
@@ -46,7 +44,10 @@ const payloadSchema = z
     { message: "Each protocol slug must appear exactly once." },
   );
 
-export async function GET() {
+export async function GET(req: Request) {
+  const limited = enforceRateLimit(req, PUBLIC_API_LIMIT);
+  if (limited) return limited;
+
   const protocols = await getProtocols();
   return NextResponse.json(
     { protocols },
@@ -55,14 +56,14 @@ export async function GET() {
 }
 
 export async function PATCH(req: Request) {
+  const limited = enforceRateLimit(req, WRITE_LIMIT);
+  if (limited) return limited;
   const auth = await requireAdmin();
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
   try {
     const body = await req.json();
     const parsed = payloadSchema.parse(body);
-    // Normalize to canonical slug order so the public grid layout is
-    // deterministic regardless of how the form serialized the array.
     const ordered: ProtocolItem[] = PROTOCOL_SLUGS.map(
       (slug) => parsed.protocols.find((p) => p.slug === slug)!,
     );
