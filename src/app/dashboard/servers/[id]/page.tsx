@@ -73,7 +73,7 @@ export default function ServerDetailPage() {
           <div className="flex-1 min-w-0">
             <h1 className="truncate text-2xl font-bold tracking-tight">{server.name}</h1>
             <div className="text-xs text-slate-400">
-              {server.countryName} · {server.provider} · <span className="font-mono">{server.domain}</span>
+              {server.countryName} · {server.provider} · <span className="font-mono">{server.domain !== "*.*.internal" ? server.domain : ""}</span>
             </div>
           </div>
           <StatusBadge status={server.status} />
@@ -125,11 +125,9 @@ export default function ServerDetailPage() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
-        <KV icon={<Globe size={14} />}  label="Domain / IP" value={<span className="font-mono">{server.domain}</span>} />
+        <KV icon={<Globe size={14} />}  label="Endpoint" value={<span className="font-mono">{server.domain}</span>} />
         <KV icon={<Server size={14} />} label="Uptime"      value={formatUptime(server.uptimeSec)} />
         <KV icon={<Activity size={14} />} label="Traffic"   value={`RX ${formatBytes(server.rxBytes)} · TX ${formatBytes(server.txBytes)}`} />
-        <KV label="SSH accounts"  value={String(server.totalSsh)} />
-        <KV label="Xray accounts" value={String(server.totalXray)} />
         <KV label="Provider"      value={server.provider} />
       </div>
     </div>

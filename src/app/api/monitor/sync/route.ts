@@ -20,8 +20,8 @@ export async function POST(req: Request) {
   try {
     const result = await syncAll();
     return NextResponse.json({ ...result, success: true, ts: new Date().toISOString() });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || "sync failed" }, { status: 500 });
+  } catch (e: unknown) {
+    return NextResponse.json({ ok: false, error: "Sync failed" }, { status: 500 });
   }
 }
 

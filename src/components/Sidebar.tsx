@@ -3,13 +3,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Logo } from "./ui/Logo";
-import { LayoutDashboard, Server, Users, Settings, Globe } from "lucide-react";
+import { LayoutDashboard, Server, Users, Settings } from "lucide-react";
 
 export type NavItem = { href: string; label: string; icon: React.ComponentType<any> };
 
 export const memberNav: NavItem[] = [
   { href: "/dashboard",         label: "Overview",  icon: LayoutDashboard },
-  { href: "/dashboard/servers", label: "Servers",   icon: Globe },
 ];
 
 export const adminNav: NavItem[] = [

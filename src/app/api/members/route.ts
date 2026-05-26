@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/guards";
+import { safeErrorMessage } from "@/lib/api-error";
 
 const createSchema = z.object({
   name: z.string().min(2),
@@ -38,10 +39,7 @@ export async function POST(req: Request) {
       select: { id: true, name: true, email: true, role: true, active: true, createdAt: true },
     });
     return NextResponse.json({ user }, { status: 201 });
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.errors?.[0]?.message || e?.message || "Invalid request" },
-      { status: 400 },
-    );
+  } catch (e: unknown) {
+    return NextResponse.json({ error: safeErrorMessage(e) }, { status: 400 });
   }
 }

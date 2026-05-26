@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/guards";
 import { serializeServer } from "@/lib/serialize";
+import { safeErrorMessage } from "@/lib/api-error";
 
 const updateSchema = z.object({
   name: z.string().min(1).optional(),
@@ -39,17 +40,18 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const data = updateSchema.parse(await req.json());
     const server = await prisma.server.update({ where: { id: params.id }, data });
     return NextResponse.json({ server: serializeServer(server) });
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.errors?.[0]?.message || e?.message || "Invalid request" },
-      { status: 400 },
-    );
+  } catch (e: unknown) {
+    return NextResponse.json({ error: safeErrorMessage(e) }, { status: 400 });
   }
 }
 
 export async function DELETE(_: Request, { params }: { params: { id: string } }) {
   const auth = await requireAdmin();
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
-  await prisma.server.delete({ where: { id: params.id } });
-  return NextResponse.json({ ok: true });
+  try {
+    await prisma.server.delete({ where: { id: params.id } });
+    return NextResponse.json({ ok: true });
+  } catch (e: unknown) {
+    return NextResponse.json({ error: safeErrorMessage(e) }, { status: 400 });
+  }
 }

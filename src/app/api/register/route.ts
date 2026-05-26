@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { rateLimit, REGISTER_LIMIT } from "@/lib/rate-limit";
+import { safeErrorMessage } from "@/lib/api-error";
 
 const schema = z.object({
   name: z.string().min(2).max(60),
@@ -10,6 +12,15 @@ const schema = z.object({
 });
 
 export async function POST(req: Request) {
+  // Anti-bruteforce: 3 registrations per 60s per IP
+  const rl = rateLimit(req, REGISTER_LIMIT);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: "Too many requests. Try again later." },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } },
+    );
+  }
+
   try {
     const body = await req.json();
     const data = schema.parse(body);
@@ -23,10 +34,7 @@ export async function POST(req: Request) {
       select: { id: true, name: true, email: true, role: true },
     });
     return NextResponse.json({ user }, { status: 201 });
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.errors?.[0]?.message || "Invalid request" },
-      { status: 400 },
-    );
+  } catch (e: unknown) {
+    return NextResponse.json({ error: safeErrorMessage(e) }, { status: 400 });
   }
 }

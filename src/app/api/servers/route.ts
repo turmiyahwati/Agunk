@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/guards";
 import { serializeServers } from "@/lib/serialize";
+import { safeErrorMessage } from "@/lib/api-error";
 
 const createSchema = z.object({
   name: z.string().min(1),
@@ -39,10 +40,7 @@ export async function POST(req: Request) {
     const data = createSchema.parse(body);
     const created = await prisma.server.create({ data });
     return NextResponse.json({ server: { ...created, rxBytes: 0, txBytes: 0 } }, { status: 201 });
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.errors?.[0]?.message || e?.message || "Invalid request" },
-      { status: 400 },
-    );
+  } catch (e: unknown) {
+    return NextResponse.json({ error: safeErrorMessage(e) }, { status: 400 });
   }
 }

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Activity, Globe2, ShieldCheck, Zap, Server, Rss } from "lucide-react";
+import { ArrowRight, Activity, Globe2, Zap, Server } from "lucide-react";
 import { Logo } from "@/components/ui/Logo";
 
 export default function Landing() {
@@ -40,7 +40,7 @@ export default function Landing() {
 
       {/* Feature grid */}
       <section className="container mx-auto max-w-6xl px-6 pb-24">
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           {features.map((f) => (
             <div key={f.title} className="glass glass-hover p-6">
               <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400/20 to-purple-500/20 text-cyan-300">
@@ -64,7 +64,5 @@ const features = [
   { icon: Activity,   title: "Realtime Health",  desc: "CPU, RAM, ping, dan traffic RX/TX update otomatis tiap beberapa detik." },
   { icon: Server,     title: "Multi-Server",     desc: "Tambah server VPS sebanyak yang Anda mau. Skala scalable tanpa batas." },
   { icon: Globe2,     title: "Per-Country View", desc: "Filter cepat berdasarkan negara, provider VPS, atau status server." },
-  { icon: ShieldCheck,title: "Secure by Default",desc: "API key + JWT auth. Kredensial server tidak pernah keluar ke client." },
   { icon: Zap,        title: "Auto Status",      desc: "Status FULL / WARNING / OFFLINE dihitung otomatis dari user aktif." },
-  { icon: Rss,        title: "VPS Agent Ready",  desc: "Drop-in Python agent untuk Debian/Ubuntu — install 1 baris perintah." },
 ];

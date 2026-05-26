@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/guards";
+import { safeErrorMessage } from "@/lib/api-error";
 
 const updateSchema = z.object({
   name: z.string().min(2).optional(),
@@ -27,11 +28,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       select: { id: true, name: true, email: true, role: true, active: true },
     });
     return NextResponse.json({ user });
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.errors?.[0]?.message || e?.message || "Invalid request" },
-      { status: 400 },
-    );
+  } catch (e: unknown) {
+    return NextResponse.json({ error: safeErrorMessage(e) }, { status: 400 });
   }
 }
 
@@ -42,6 +40,10 @@ export async function DELETE(_: Request, { params }: { params: { id: string } })
   if ((auth.session.user as any).id === params.id) {
     return NextResponse.json({ error: "Cannot delete yourself" }, { status: 400 });
   }
-  await prisma.user.delete({ where: { id: params.id } });
-  return NextResponse.json({ ok: true });
+  try {
+    await prisma.user.delete({ where: { id: params.id } });
+    return NextResponse.json({ ok: true });
+  } catch (e: unknown) {
+    return NextResponse.json({ error: safeErrorMessage(e) }, { status: 400 });
+  }
 }
