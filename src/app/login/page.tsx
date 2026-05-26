@@ -18,17 +18,38 @@ function LoginForm() {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (loading) return; // belt-and-suspenders against double-submit
+
     setLoading(true);
-    const res = await signIn("credentials", { email, password, redirect: false });
-    setLoading(false);
-    if (res?.error) {
-      toast.error("Email atau password salah");
-      return;
+
+    // Use a fixed toast id so repeated failures replace the existing toast
+    // instead of stacking — fixes the "spam" reported in the bug.
+    const TOAST_ID = "login-feedback";
+    toast.loading("Memproses…", { id: TOAST_ID });
+
+    try {
+      const res = await signIn("credentials", {
+        email,
+        password,
+        redirect: false,
+      });
+
+      if (!res || res.error) {
+        toast.error("Email atau password salah", { id: TOAST_ID });
+        return;
+      }
+
+      toast.success("Login berhasil", { id: TOAST_ID });
+      const callbackUrl = sp.get("callbackUrl");
+      router.replace(callbackUrl || "/admin");
+      router.refresh();
+    } catch {
+      // Network / unexpected client error — keep the message generic so we
+      // never leak internals to the UI.
+      toast.error("Tidak dapat menghubungi server. Coba lagi.", { id: TOAST_ID });
+    } finally {
+      setLoading(false);
     }
-    toast.success("Login berhasil");
-    const callbackUrl = sp.get("callbackUrl");
-    router.replace(callbackUrl || "/admin");
-    router.refresh();
   }
 
   return (

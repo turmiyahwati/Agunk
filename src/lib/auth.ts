@@ -38,6 +38,34 @@ function clearLoginAttempts(email: string): void {
   loginAttempts.delete(email);
 }
 
+/**
+ * Defensive NEXTAUTH_SECRET resolution.
+ *
+ * In production the secret MUST be set via env. In development we accept
+ * a deterministic fallback so login still works when `.env` failed to
+ * load (Windows BOM, stale dev server, etc.) — sessions will keep working
+ * across restarts because the secret is stable.
+ */
+function resolveSecret(): string {
+  const fromEnv = process.env.NEXTAUTH_SECRET;
+  if (fromEnv && fromEnv.length >= 16) return fromEnv;
+
+  if (process.env.NODE_ENV === "production") {
+    // Don't mask in prod. NextAuth will refuse to issue sessions if missing.
+    // eslint-disable-next-line no-console
+    console.error("[auth] NEXTAUTH_SECRET not set in production!");
+    return fromEnv || "";
+  }
+
+  // Stable dev fallback. Never use this in production.
+  // eslint-disable-next-line no-console
+  console.warn(
+    "[auth] NEXTAUTH_SECRET not set — using deterministic dev fallback. " +
+      "Set NEXTAUTH_SECRET in your .env (openssl rand -base64 32) for production.",
+  );
+  return "dev-only-fallback-secret-please-replace-in-production-32chars";
+}
+
 export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
@@ -57,21 +85,29 @@ export const authOptions: NextAuthOptions = {
           return null;
         }
 
-        const user = await prisma.user.findUnique({ where: { email } });
-        if (!user || !user.active) {
-          recordFailedLogin(email);
+        try {
+          const user = await prisma.user.findUnique({ where: { email } });
+          if (!user || !user.active || !user.password) {
+            recordFailedLogin(email);
+            return null;
+          }
+
+          const ok = await bcrypt.compare(creds.password, user.password);
+          if (!ok) {
+            recordFailedLogin(email);
+            return null;
+          }
+
+          clearLoginAttempts(email);
+          return { id: user.id, email: user.email, name: user.name } as any;
+        } catch (err) {
+          // Never let a DB error explode the auth flow — the form will
+          // simply show "wrong credentials" and the operator sees the real
+          // cause in the server logs.
+          // eslint-disable-next-line no-console
+          console.error("[auth] authorize() error:", err);
           return null;
         }
-
-        const ok = await bcrypt.compare(creds.password, user.password);
-        if (!ok) {
-          recordFailedLogin(email);
-          return null;
-        }
-
-        clearLoginAttempts(email);
-        // Every authenticated user IS an admin. No role field anymore.
-        return { id: user.id, email: user.email, name: user.name } as any;
       },
     }),
   ],
@@ -89,5 +125,5 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-  secret: process.env.NEXTAUTH_SECRET,
+  secret: resolveSecret(),
 };

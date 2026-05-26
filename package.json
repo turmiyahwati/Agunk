@@ -6,13 +6,18 @@
   "author": "Pakde Xresx Digital Store",
   "license": "MIT",
   "scripts": {
+    "predev": "node scripts/check-env.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/check-env.mjs",
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "next lint",
+    "setup": "node scripts/check-env.mjs && prisma generate && prisma db push && tsx prisma/seed.ts",
     "db:push": "prisma db push",
+    "predb:seed": "node scripts/check-env.mjs && prisma db push --skip-generate",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
+    "db:reset": "prisma db push --force-reset && tsx prisma/seed.ts",
     "monitor:sync": "tsx scripts/sync-once.ts"
   },
   "dependencies": {

@@ -2,6 +2,17 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
+// Defensive: if .env failed to load (Windows BOM, missing file, etc.) we
+// still want the seed to succeed in development. Production should always
+// have DATABASE_URL set explicitly.
+if (!process.env.DATABASE_URL) {
+  process.env.DATABASE_URL = "file:./dev.db";
+  // eslint-disable-next-line no-console
+  console.warn(
+    "[seed] DATABASE_URL not set — falling back to file:./dev.db (dev only).",
+  );
+}
+
 const ServerStatus = {
   ONLINE: "ONLINE",
   OFFLINE: "OFFLINE",
