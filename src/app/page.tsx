@@ -7,6 +7,8 @@ import { StatCard } from "@/components/StatCard";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PublicHeader } from "@/components/PublicHeader";
 import { WelcomeBanner } from "@/components/WelcomeBanner";
+import { ActivityLog } from "@/components/ActivityLog";
+import { ProtocolInfo } from "@/components/ProtocolInfo";
 
 const BRAND = process.env.NEXT_PUBLIC_BRAND_NAME || "PT Sontoloyo";
 const AUTHOR = process.env.NEXT_PUBLIC_AUTHOR || "Pakde Xresx Digital Store";
@@ -115,6 +117,10 @@ export default function PublicMonitoring() {
             ))}
           </div>
         )}
+
+        <ActivityLog />
+
+        <ProtocolInfo />
 
         <footer className="border-t border-white/5 pt-6 text-center text-xs text-slate-500">
           © {new Date().getFullYear()} {BRAND} — Built by {AUTHOR}.

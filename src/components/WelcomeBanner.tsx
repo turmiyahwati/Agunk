@@ -22,17 +22,18 @@ export function WelcomeBanner() {
           <span className="grid h-3 w-3 place-items-center">
             <span className="h-1.5 w-1.5 animate-pulse-glow rounded-full bg-emerald-400" />
           </span>
-          Monitoring Server
+          Monitoring Server · Live
         </div>
 
         <h1 className="text-3xl font-extrabold leading-tight tracking-tight md:text-4xl">
-          Cek <span className="neon-text">server VPN</span> kamu,<br className="hidden md:block" />
-          {" "}realtime &amp; tanpa ribet.
+          Selamat datang di pusat <span className="neon-text">monitoring Server VPN PREMIUM</span>{" "}
+          PT Sontoloyo
         </h1>
 
         <p className="mt-3 max-w-2xl text-sm text-slate-400 md:text-base">
-          Pantau status, slot, dan kecepatan semua server langsung dari sini.
-          Update otomatis tiap beberapa detik — gak perlu login.
+          Pantau status, slot, kecepatan, ping, semua server langsung dari sini
+          serta kesehatan seluruh service server VPN SSH/XRAY dalam satu website
+          yang otomatis update setiap beberapa detik.
         </p>
 
         <div className="mt-4 inline-flex items-center gap-2 text-xs text-slate-500">

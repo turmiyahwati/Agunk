@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Server as ServerIcon, Activity, Wifi, Users, AlertTriangle } from "lucide-react";
+import { Server as ServerIcon, Activity, Wifi, Users, AlertTriangle, PowerOff } from "lucide-react";
 import { StatCard } from "@/components/StatCard";
 import { useServers } from "@/hooks/useServers";
 import { ServerCard } from "@/components/ServerCard";
@@ -30,9 +30,6 @@ export default function AdminOverview() {
     return () => { alive = false; clearInterval(t); };
   }, []);
 
-  const offline = stats?.servers.offline ?? 0;
-  const full = stats?.servers.full ?? 0;
-
   return (
     <div className="space-y-6">
       <div>
@@ -42,11 +39,12 @@ export default function AdminOverview() {
         <p className="text-sm text-slate-400">Statistik realtime seluruh fleet VPN/Xray.</p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
-        <StatCard icon={ServerIcon}    label="Servers"     value={stats?.servers.total ?? 0}   tone="cyan"    live />
-        <StatCard icon={Activity}      label="Online"      value={stats?.servers.online ?? 0}  tone="emerald" live />
-        <StatCard icon={AlertTriangle} label="Warning"     value={stats?.servers.warning ?? 0} tone="yellow"  live />
-        <StatCard icon={Wifi}          label="Full / Off"  value={`${full} / ${offline}`}      tone="rose" />
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <StatCard icon={ServerIcon}    label="Servers"             value={stats?.servers.total ?? 0}   tone="cyan"    live />
+        <StatCard icon={Activity}      label="Online"              value={stats?.servers.online ?? 0}  tone="emerald" live />
+        <StatCard icon={AlertTriangle} label="Warning"             value={stats?.servers.warning ?? 0} tone="yellow"  live />
+        <StatCard icon={Wifi}          label="Full"                value={stats?.servers.full ?? 0}    tone="rose" />
+        <StatCard icon={PowerOff}      label="Offline"             value={stats?.servers.offline ?? 0} tone="rose" />
         <StatCard
           icon={Users}
           label="Active Connections"

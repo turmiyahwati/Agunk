@@ -45,3 +45,24 @@ export function deriveStatus(opts: {
   if (pct >= 90) return "WARNING";
   return "ONLINE";
 }
+
+/**
+ * Indonesian relative-time formatter used by the activity log.
+ *  < 5s  → "baru saja"
+ *  < 60s → "X detik lalu"
+ *  < 1h  → "X menit lalu"
+ *  < 24h → "X jam lalu"
+ *  else  → "X hari lalu"
+ */
+export function timeAgo(input: Date | string | number): string {
+  const d = input instanceof Date ? input : new Date(input);
+  const seconds = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+  if (seconds < 5) return "baru saja";
+  if (seconds < 60) return `${seconds} detik lalu`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} menit lalu`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} jam lalu`;
+  const days = Math.floor(hours / 24);
+  return `${days} hari lalu`;
+}

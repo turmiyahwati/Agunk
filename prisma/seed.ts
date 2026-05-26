@@ -118,6 +118,37 @@ async function main() {
     for (const d of demos) await prisma.server.create({ data: d as any });
   }
 
+  // Demo activity log entries — only inserted when the table is empty.
+  // Runs after seed completes so admin can re-seed to refresh timestamps.
+  const existingActivity = await prisma.activity.count();
+  if (existingActivity === 0) {
+    const protocols = ["SSH", "VMESS", "VLESS", "TROJAN"] as const;
+    const serverNames = [
+      "SG-Premium-01",
+      "ID-Jakarta-01",
+      "JP-Tokyo-02",
+      "US-NewYork-01",
+    ];
+    // 16 entries spread across the last hour so the homepage has a
+    // believable "live" feel right after first run.
+    const offsets = [
+      5, 30, 75, 120, 200, 330, 480, 600, 760, 920,
+      1100, 1320, 1600, 1900, 2300, 2800,
+    ];
+    for (const offsetSec of offsets) {
+      const protocol = protocols[Math.floor(Math.random() * protocols.length)];
+      const serverName = serverNames[Math.floor(Math.random() * serverNames.length)];
+      await prisma.activity.create({
+        data: {
+          protocol,
+          serverName,
+          action: "CREATE",
+          createdAt: new Date(Date.now() - offsetSec * 1000),
+        },
+      });
+    }
+  }
+
   console.log("Seed complete.");
   console.log("Admin login:", email, "/", password);
 }

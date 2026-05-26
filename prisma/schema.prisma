@@ -95,3 +95,17 @@ model Setting {
   value     String?
   updatedAt DateTime @updatedAt
 }
+
+// Recent activity log surfaced on the public homepage.
+// Stores ONLY non-sensitive metadata (protocol kind + server name +
+// action + timestamp). Never store usernames, passwords, UUIDs, IPs,
+// tokens, or any PII here.
+model Activity {
+  id         String   @id @default(cuid())
+  protocol   String   // "SSH" | "VMESS" | "VLESS" | "TROJAN"
+  serverName String
+  action     String   @default("CREATE")
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+}
