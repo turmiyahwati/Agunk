@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
-import { Search, Globe, Server as ServerIcon, Activity, Wifi, Users } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Search, Globe, Server as ServerIcon, Activity, Wifi, Users, PowerOff, RefreshCcw } from "lucide-react";
 import { useServers } from "@/hooks/useServers";
 import { ServerCard } from "@/components/ServerCard";
 import { StatCard } from "@/components/StatCard";
@@ -13,6 +13,7 @@ import { ProtocolInfo } from "@/components/ProtocolInfo";
 const BRAND = process.env.NEXT_PUBLIC_BRAND_NAME || "PT Sontoloyo";
 const AUTHOR = process.env.NEXT_PUBLIC_AUTHOR || "Pakde Xresx Digital Store";
 const REFRESH_MS = Number(process.env.NEXT_PUBLIC_REFRESH_MS || 10000);
+const REFRESH_COOLDOWN_MS = 2500;
 
 type Stats = {
   servers: { total: number; online: number; offline: number; full: number; warning: number };
@@ -20,25 +21,45 @@ type Stats = {
 };
 
 export default function PublicMonitoring() {
-  const { servers, loading } = useServers();
+  const { servers, loading, refresh: refreshServers } = useServers();
   const [stats, setStats] = useState<Stats | null>(null);
   const [q, setQ] = useState("");
   const [country, setCountry] = useState("ALL");
   const [provider, setProvider] = useState("ALL");
 
+  // Manual-refresh state
+  const [refreshing, setRefreshing] = useState(false);
+  const [activityNonce, setActivityNonce] = useState(0);
+  const cooldownUntilRef = useRef(0);
+
+  // Stats fetcher — reused by the polling effect AND the refresh button.
+  const fetchStats = useCallback(async () => {
+    try {
+      const res = await fetch("/api/stats", { cache: "no-store" });
+      const j = await res.json();
+      setStats(j);
+    } catch {}
+  }, []);
+
   // Realtime stats polling
   useEffect(() => {
-    let alive = true;
-    const fetchStats = async () => {
-      try {
-        const j = await fetch("/api/stats", { cache: "no-store" }).then((r) => r.json());
-        if (alive) setStats(j);
-      } catch {}
-    };
     fetchStats();
     const t = setInterval(fetchStats, REFRESH_MS);
-    return () => { alive = false; clearInterval(t); };
-  }, []);
+    return () => clearInterval(t);
+  }, [fetchStats]);
+
+  const handleManualRefresh = useCallback(async () => {
+    if (refreshing) return;
+    if (Date.now() < cooldownUntilRef.current) return;
+    setRefreshing(true);
+    try {
+      await Promise.allSettled([fetchStats(), refreshServers()]);
+      setActivityNonce((n) => n + 1);
+    } finally {
+      cooldownUntilRef.current = Date.now() + REFRESH_COOLDOWN_MS;
+      setRefreshing(false);
+    }
+  }, [refreshing, fetchStats, refreshServers]);
 
   const countries = useMemo(
     () => Array.from(new Set((servers || []).map((s) => s.countryName))).sort(),
@@ -66,10 +87,11 @@ export default function PublicMonitoring() {
       <main className="container mx-auto max-w-7xl space-y-6 px-4 py-6 md:px-6 md:py-8">
         <WelcomeBanner />
 
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           <StatCard icon={ServerIcon} label="Total Server" value={stats?.servers.total ?? 0} tone="cyan" live />
           <StatCard icon={Activity}   label="Online"       value={stats?.servers.online ?? 0} tone="emerald" live />
           <StatCard icon={Wifi}       label="Full Slot"    value={stats?.servers.full ?? 0} tone="yellow" />
+          <StatCard icon={PowerOff}   label="Offline"      value={stats?.servers.offline ?? 0} tone="rose" />
           <StatCard
             icon={Users}
             label="Active Connections"
@@ -98,6 +120,17 @@ export default function PublicMonitoring() {
             <option value="ALL">Semua provider</option>
             {providers.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
+          <button
+            type="button"
+            onClick={handleManualRefresh}
+            disabled={refreshing}
+            className="btn-ghost whitespace-nowrap text-xs disabled:cursor-not-allowed"
+            title="Refresh statistik & daftar server"
+            aria-label="Refresh server data"
+          >
+            <RefreshCcw size={14} className={refreshing ? "animate-spin" : ""} />
+            {refreshing ? "Memperbarui..." : "Refresh Server"}
+          </button>
         </div>
 
         {loading && !servers ? (
@@ -118,7 +151,7 @@ export default function PublicMonitoring() {
           </div>
         )}
 
-        <ActivityLog />
+        <ActivityLog refreshNonce={activityNonce} />
 
         <ProtocolInfo />
 

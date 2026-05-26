@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sparkles } from "lucide-react";
 import { timeAgo } from "@/lib/utils";
@@ -25,26 +25,35 @@ const PROTOCOL_TONE: Record<Activity["protocol"], string> = {
  * Realtime feed of VPN account creation events.
  * Polls /api/activity at the same interval as the rest of the dashboard.
  * Renders only safe metadata (protocol + server name + relative time).
+ *
+ * Optional `refreshNonce` prop: bump it from the parent (e.g. from a
+ * "Refresh Server" button) to force an immediate refetch without
+ * waiting for the next polling tick.
  */
-export function ActivityLog() {
+export function ActivityLog({ refreshNonce = 0 }: { refreshNonce?: number } = {}) {
   const [items, setItems] = useState<Activity[] | null>(null);
   const [, forceTick] = useState(0);
 
+  const fetchOnce = useCallback(async () => {
+    try {
+      const res = await fetch("/api/activity?limit=12", { cache: "no-store" });
+      const j = await res.json();
+      setItems(j.activities ?? []);
+    } catch {
+      setItems([]);
+    }
+  }, []);
+
   useEffect(() => {
-    let alive = true;
-    const fetchOnce = async () => {
-      try {
-        const res = await fetch("/api/activity?limit=12", { cache: "no-store" });
-        const j = await res.json();
-        if (alive) setItems(j.activities ?? []);
-      } catch {
-        if (alive) setItems([]);
-      }
-    };
     fetchOnce();
     const t = setInterval(fetchOnce, REFRESH_MS);
-    return () => { alive = false; clearInterval(t); };
-  }, []);
+    return () => clearInterval(t);
+  }, [fetchOnce]);
+
+  // External refresh trigger from the public page's "Refresh Server" button.
+  useEffect(() => {
+    if (refreshNonce > 0) fetchOnce();
+  }, [refreshNonce, fetchOnce]);
 
   // Re-render every 30s so "X menit lalu" labels stay fresh between polls.
   useEffect(() => {
