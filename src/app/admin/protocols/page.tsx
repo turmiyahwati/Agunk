@@ -156,59 +156,136 @@ export default function AdminProtocolsPage() {
                 </Field>
 
                 <Field
-                  label="Description / Subtitle"
-                  hint="Opsional. Kosongkan untuk menyembunyikan baris ini."
+                  label="Description / Subtitle (Lama)"
+                  hint="Field lama, tidak ditampilkan di tampilan baru. Aman dikosongkan."
                 >
                   <input
                     className="input"
                     maxLength={200}
-                    placeholder="contoh: Cocok untuk pemakaian harian"
+                    placeholder="(opsional)"
                     value={p.description}
                     onChange={(e) => patchItem(p.slug, { description: e.target.value })}
                   />
                 </Field>
 
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="Bullet 1">
+                  <Field label="Bullet 1 (Lama)">
                     <input
                       className="input"
                       maxLength={150}
+                      placeholder="(opsional)"
                       value={p.bullet1}
                       onChange={(e) => patchItem(p.slug, { bullet1: e.target.value })}
-                      required
                     />
                   </Field>
-                  <Field label="Bullet 2">
+                  <Field label="Bullet 2 (Lama)">
                     <input
                       className="input"
                       maxLength={150}
+                      placeholder="(opsional)"
                       value={p.bullet2}
                       onChange={(e) => patchItem(p.slug, { bullet2: e.target.value })}
-                      required
                     />
                   </Field>
                 </div>
 
-                {/* Mini preview that mirrors the public card style */}
+                {/* ─── New fields used by the redesigned card ─── */}
+                <div className="rounded-xl border border-cyan-300/15 bg-cyan-300/[0.03] p-4">
+                  <div className="mb-3 flex items-center gap-2 text-[11px] uppercase tracking-wider text-cyan-300">
+                    <Sparkles size={12} />
+                    Tampilan Baru
+                  </div>
+
+                  <div className="space-y-3">
+                    <Field
+                      label="Subtitle"
+                      hint="Tagline pendek yang muncul di bawah judul kartu."
+                    >
+                      <input
+                        className="input"
+                        maxLength={200}
+                        value={p.subtitle}
+                        onChange={(e) => patchItem(p.slug, { subtitle: e.target.value })}
+                      />
+                    </Field>
+
+                    <Field
+                      label="Body Description"
+                      hint="Paragraf besar yang menjelaskan protocol. Mendukung baris baru."
+                    >
+                      <textarea
+                        className="input min-h-[100px] resize-y leading-relaxed"
+                        maxLength={800}
+                        value={p.body}
+                        onChange={(e) => patchItem(p.slug, { body: e.target.value })}
+                      />
+                    </Field>
+
+                    {[1, 2, 3].map((n) => {
+                      const labelKey = `feature${n}Label` as keyof ProtocolItem;
+                      const valueKey = `feature${n}Value` as keyof ProtocolItem;
+                      return (
+                        <div key={n} className="grid gap-3 sm:grid-cols-[1fr_1.2fr]">
+                          <Field label={`Feature ${n} — Label`}>
+                            <input
+                              className="input"
+                              maxLength={50}
+                              placeholder={n === 1 ? "Port" : n === 2 ? "Latensi" : "Performa"}
+                              value={p[labelKey] as string}
+                              onChange={(e) => patchItem(p.slug, { [labelKey]: e.target.value } as Partial<ProtocolItem>)}
+                            />
+                          </Field>
+                          <Field label={`Feature ${n} — Value`}>
+                            <input
+                              className="input"
+                              maxLength={50}
+                              placeholder={n === 1 ? "443 / 22" : n === 2 ? "Rendah" : "Tinggi"}
+                              value={p[valueKey] as string}
+                              onChange={(e) => patchItem(p.slug, { [valueKey]: e.target.value } as Partial<ProtocolItem>)}
+                            />
+                          </Field>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* ─── Mini preview that mirrors the public tabbed card ─── */}
                 <div className="rounded-xl border border-white/5 bg-black/30 p-4">
                   <div className="mb-2 flex items-center gap-2 text-[11px] text-slate-500">
                     <Sparkles size={12} className="text-cyan-300" />
                     Preview
                   </div>
-                  <div className="text-sm font-bold tracking-wider">{p.name}</div>
-                  {p.description && (
-                    <p className="mt-1 text-xs text-slate-400/90">{p.description}</p>
+                  <div className="flex items-start gap-3">
+                    <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/[0.04] ring-1 ring-white/10 ${tone}`}>
+                      <Icon size={18} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-base font-bold tracking-tight">{p.name}</div>
+                      {p.subtitle && (
+                        <div className="text-[11px] text-slate-400">{p.subtitle}</div>
+                      )}
+                    </div>
+                  </div>
+                  {p.body && (
+                    <p className="mt-2 text-xs leading-relaxed text-slate-300/80">{p.body}</p>
                   )}
-                  <ul className="mt-2 space-y-1 text-xs text-slate-400">
-                    <li className="flex items-start gap-1.5">
-                      <span className="mt-1 inline-block h-1 w-1 flex-shrink-0 rounded-full bg-cyan-300/60" />
-                      <span>{p.bullet1}</span>
-                    </li>
-                    <li className="flex items-start gap-1.5">
-                      <span className="mt-1 inline-block h-1 w-1 flex-shrink-0 rounded-full bg-cyan-300/60" />
-                      <span>{p.bullet2}</span>
-                    </li>
-                  </ul>
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    {[1, 2, 3].map((n) => {
+                      const label = p[`feature${n}Label` as keyof ProtocolItem] as string;
+                      const value = p[`feature${n}Value` as keyof ProtocolItem] as string;
+                      return (
+                        <div key={n} className="rounded-lg border border-white/5 bg-white/[0.02] p-2">
+                          <div className="truncate text-[9px] uppercase tracking-wider text-slate-500">
+                            {label || "—"}
+                          </div>
+                          <div className="truncate text-[11px] font-semibold text-white">
+                            {value || "—"}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                   {!p.active && (
                     <div className="mt-2 text-[10px] uppercase tracking-wider text-rose-300/80">
                       Hidden on public page

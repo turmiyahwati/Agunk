@@ -5,8 +5,14 @@ import { prisma } from "./prisma";
  * Stored as a single JSON value under the `protocols` key in the existing
  * Setting model — no schema changes required.
  *
- * Defaults below match the previous hardcoded ProtocolInfo.tsx exactly,
- * so the card grid stays visually identical until an admin edits it.
+ * Field overview:
+ *  - LEGACY (kept for backward compat, no longer rendered on the public
+ *    page): description, bullet1, bullet2
+ *  - NEW (drive the redesigned tabbed card):
+ *      subtitle, body,
+ *      feature1Label / feature1Value,
+ *      feature2Label / feature2Value,
+ *      feature3Label / feature3Value
  *
  * Icons / tone classes are intentionally NOT stored — they are mapped
  * from the protocol `slug` inside the component layer so the look stays
@@ -23,12 +29,26 @@ export type ProtocolItem = {
   slug: ProtocolSlug;
   /** Display label (admin-editable, defaults to slug). */
   name: string;
-  /** Optional one-line subtitle below the name. Empty string = no render. */
+  /** LEGACY small subtitle — kept so older saved data keeps roundtripping. */
   description: string;
+  /** LEGACY bullets — kept for backward compat. */
   bullet1: string;
   bullet2: string;
   /** Hide the card on the public page when false. */
   active: boolean;
+
+  // ─── New fields used by the tabbed card design ───
+  /** Short tagline shown below the title in the active card. */
+  subtitle: string;
+  /** Long paragraph body rendered below the subtitle. */
+  body: string;
+  /** Three small "spec" boxes below the body. Pair label + value. */
+  feature1Label: string;
+  feature1Value: string;
+  feature2Label: string;
+  feature2Value: string;
+  feature3Label: string;
+  feature3Value: string;
 };
 
 export const DEFAULT_PROTOCOLS: ProtocolItem[] = [
@@ -39,6 +59,15 @@ export const DEFAULT_PROTOCOLS: ProtocolItem[] = [
     bullet1: "Stabil & hemat kuota",
     bullet2: "Cocok browsing dan sosial media",
     active: true,
+    subtitle: "Stabil & kompatibel universal",
+    body:
+      "Tunnel klasik berbasis SSH dengan transport WebSocket yang mudah lewat di hampir semua jaringan operator. Cocok untuk pemakaian harian, browsing, dan media sosial dengan kuota irit.",
+    feature1Label: "Port",
+    feature1Value: "443 / 22",
+    feature2Label: "Enkripsi",
+    feature2Value: "AES-256",
+    feature3Label: "Latensi",
+    feature3Value: "Stabil",
   },
   {
     slug: "VMESS",
@@ -47,6 +76,15 @@ export const DEFAULT_PROTOCOLS: ProtocolItem[] = [
     bullet1: "Cepat & fleksibel",
     bullet2: "Cocok streaming dan harian",
     active: true,
+    subtitle: "Protocol V2Ray generasi awal",
+    body:
+      "VMESS adalah protocol V2Ray klasik dengan dukungan TLS dan WebSocket. Lebih fleksibel dan cepat dibanding SSH biasa, cocok untuk streaming, gaming ringan, dan multitasking harian.",
+    feature1Label: "Transport",
+    feature1Value: "WS / TLS",
+    feature2Label: "Latensi",
+    feature2Value: "Rendah",
+    feature3Label: "Performa",
+    feature3Value: "Tinggi",
   },
   {
     slug: "VLESS",
@@ -55,6 +93,15 @@ export const DEFAULT_PROTOCOLS: ProtocolItem[] = [
     bullet1: "Ringan & modern",
     bullet2: "Ping lebih stabil",
     active: true,
+    subtitle: "Lebih ringan dari VMess",
+    body:
+      "VLESS adalah protocol V2Ray modern tanpa overhead enkripsi tambahan dari VMess. Lebih efisien, ping lebih stabil, dan ideal untuk koneksi jangka panjang serta streaming kualitas tinggi.",
+    feature1Label: "Transport",
+    feature1Value: "WS / GRPC",
+    feature2Label: "Latensi",
+    feature2Value: "Sangat Rendah",
+    feature3Label: "Stealth",
+    feature3Value: "Modern",
   },
   {
     slug: "TROJAN",
@@ -63,12 +110,24 @@ export const DEFAULT_PROTOCOLS: ProtocolItem[] = [
     bullet1: "Koneksi lebih aman",
     bullet2: "Cocok jaringan ketat",
     active: true,
+    subtitle: "Menyamar sebagai HTTPS",
+    body:
+      "Trojan menyamarkan trafik VPN sebagai HTTPS biasa, sehingga sangat sulit difilter oleh DPI (Deep Packet Inspection). Pilihan terbaik di jaringan kantor, kampus, atau hotspot dengan firewall ketat.",
+    feature1Label: "Bypass DPI",
+    feature1Value: "Tinggi",
+    feature2Label: "Stealth",
+    feature2Value: "Premium",
+    feature3Label: "Stabilitas",
+    feature3Value: "Sangat Stabil",
   },
 ];
 
 /**
- * Always returns exactly four entries in the canonical PROTOCOL_SLUGS
- * order. Any missing or malformed entries fall back to defaults.
+ * Defensive read.  Always returns four canonically-ordered entries.
+ * Each field is taken from storage when present and well-typed,
+ * otherwise it falls back to the per-protocol default — so older saved
+ * payloads (without the new fields) automatically gain sensible values
+ * without any migration step.
  */
 export async function getProtocols(): Promise<ProtocolItem[]> {
   try {
@@ -82,16 +141,29 @@ export async function getProtocols(): Promise<ProtocolItem[]> {
       );
       const fallback = DEFAULT_PROTOCOLS.find((p) => p.slug === slug)!;
       if (!fromStorage) return fallback;
+      const pickStr = (k: keyof ProtocolItem) =>
+        typeof (fromStorage as any)[k] === "string"
+          ? ((fromStorage as any)[k] as string)
+          : (fallback[k] as string);
+      const pickBool = (k: keyof ProtocolItem) =>
+        typeof (fromStorage as any)[k] === "boolean"
+          ? ((fromStorage as any)[k] as boolean)
+          : (fallback[k] as boolean);
       return {
         slug,
-        name: typeof fromStorage.name === "string" ? fromStorage.name : fallback.name,
-        description:
-          typeof fromStorage.description === "string"
-            ? fromStorage.description
-            : fallback.description,
-        bullet1: typeof fromStorage.bullet1 === "string" ? fromStorage.bullet1 : fallback.bullet1,
-        bullet2: typeof fromStorage.bullet2 === "string" ? fromStorage.bullet2 : fallback.bullet2,
-        active: typeof fromStorage.active === "boolean" ? fromStorage.active : fallback.active,
+        name: pickStr("name"),
+        description: pickStr("description"),
+        bullet1: pickStr("bullet1"),
+        bullet2: pickStr("bullet2"),
+        active: pickBool("active"),
+        subtitle: pickStr("subtitle"),
+        body: pickStr("body"),
+        feature1Label: pickStr("feature1Label"),
+        feature1Value: pickStr("feature1Value"),
+        feature2Label: pickStr("feature2Label"),
+        feature2Value: pickStr("feature2Value"),
+        feature3Label: pickStr("feature3Label"),
+        feature3Value: pickStr("feature3Value"),
       };
     });
   } catch {

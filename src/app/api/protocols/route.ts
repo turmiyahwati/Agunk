@@ -20,9 +20,21 @@ const itemSchema = z.object({
   slug: z.enum(PROTOCOL_SLUGS),
   name: z.string().trim().min(1).max(50),
   description: z.string().trim().max(200).default(""),
-  bullet1: z.string().trim().min(1).max(150),
-  bullet2: z.string().trim().min(1).max(150),
+  bullet1: z.string().trim().max(150).default(""),
+  bullet2: z.string().trim().max(150).default(""),
   active: z.boolean(),
+
+  // New fields driving the redesigned card. All optional with sensible
+  // empty defaults so older clients posting just the legacy fields keep
+  // working — server merges with stored values via the lib helpers.
+  subtitle: z.string().trim().max(200).default(""),
+  body: z.string().trim().max(800).default(""),
+  feature1Label: z.string().trim().max(50).default(""),
+  feature1Value: z.string().trim().max(50).default(""),
+  feature2Label: z.string().trim().max(50).default(""),
+  feature2Value: z.string().trim().max(50).default(""),
+  feature3Label: z.string().trim().max(50).default(""),
+  feature3Value: z.string().trim().max(50).default(""),
 });
 
 const payloadSchema = z
