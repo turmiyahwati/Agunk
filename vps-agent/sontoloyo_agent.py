@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import os
 import re
+import json
 import time
 import socket
 import subprocess
@@ -107,6 +108,30 @@ def _net_rx_tx() -> tuple[int, int]:
     return int(n.bytes_recv), int(n.bytes_sent)
 
 
+def _vnstat_total() -> tuple[int, int]:
+    """Return cumulative (rx_bytes, tx_bytes) from `vnstat --json`.
+
+    vnstat aggregates traffic across reboots in its on-disk database, so
+    the returned value reflects long-term usage (the same number you see
+    in the Premium auto-installer banner). Falls back to the per-process
+    psutil counter when vnstat is not installed or its DB is empty.
+    """
+    try:
+        out = subprocess.check_output(
+            ["vnstat", "--json"], text=True, timeout=3,
+        )
+        data = json.loads(out)
+        iface = data.get("interfaces", [{}])[0]
+        total = iface.get("traffic", {}).get("total", {})
+        rx = int(total.get("rx", 0))
+        tx = int(total.get("tx", 0))
+        if rx > 0 or tx > 0:
+            return rx, tx
+    except Exception:
+        pass
+    return _net_rx_tx()
+
+
 def _count_pattern(cmd: str) -> int:
     try:
         out = subprocess.check_output(cmd, shell=True, text=True, timeout=3)
@@ -120,13 +145,58 @@ def _ssh_online() -> int:
 
 
 def _xray_online() -> int:
+    """Count active Xray (vmess/vless/trojan) connections.
+
+    Prefer parsing the Indonesian Premium auto-installer's compiled
+    `cek-vme` command — its stdout is line-per-connection and shaped
+    like ``943 - 'indoJD' - 127.0.0.1:30544``, which gives us an
+    accurate per-connection count without poking at internal Xray API.
+
+    When `cek-vme` is missing (other VPS distros), fall back to a
+    permissive `ss` query that covers the conventional Xray/HTTPS
+    listener ports plus the local 10000-10010 inbound range used by
+    haproxy → xray pipelines.
+    """
+    # 1) Premium / FuxiVPS / Vladiyot family — `cek-vme` is the source of truth
+    try:
+        out = subprocess.check_output(
+            ["cek-vme"], text=True, timeout=5, stdin=subprocess.DEVNULL,
+        )
+        count = sum(1 for line in out.splitlines() if "'" in line and " - " in line)
+        if count > 0:
+            return count
+    except Exception:
+        pass
+
+    # 2) Generic fallback — ss-based connection count on Xray ports
     return _count_pattern(
-        "ss -tn state established '( sport = :443 or sport = :80 or sport = :8443 )' "
+        "ss -tn state established '( sport = :443 or sport = :80 or sport = :8443 "
+        "or ( sport >= :10000 and sport <= :10010 ) )' "
         "| tail -n +2 || true"
     )
 
 
 def _total_ssh_accounts() -> int:
+    """Count total SSH accounts.
+
+    Lookup order (first hit wins):
+      1. `/etc/ssh/.ssh.db` — Indonesian Premium auto-installer convention
+         (FuxiVPS / Vladiyot / Apik / etc). Lines start with ``#ssh#``.
+      2. `/etc/sontoloyo/ssh.users` — operator-managed plain list.
+      3. `/etc/passwd` — generic fallback (uid >= 1000, real shell).
+    """
+    # 1) Premium auto-installer DB
+    f = "/etc/ssh/.ssh.db"
+    if os.path.isfile(f):
+        try:
+            with open(f) as fp:
+                n = sum(1 for ln in fp if ln.strip().startswith("#ssh#"))
+            if n > 0:
+                return n
+        except Exception:
+            pass
+
+    # 2) Sontoloyo-managed list
     f = "/etc/sontoloyo/ssh.users"
     if os.path.isfile(f):
         try:
@@ -134,6 +204,8 @@ def _total_ssh_accounts() -> int:
                 return sum(1 for ln in fp if ln.strip() and not ln.startswith("#"))
         except Exception:
             return 0
+
+    # 3) Generic /etc/passwd fallback
     try:
         n = 0
         with open("/etc/passwd") as fp:
@@ -151,6 +223,28 @@ def _total_ssh_accounts() -> int:
 
 
 def _total_xray_accounts() -> int:
+    """Count total Xray (vmess/vless/trojan) accounts.
+
+    Lookup order (first hit wins):
+      1. `/etc/xray/.userall.db` — Indonesian Premium auto-installer DB.
+         Lines start with ``#ssh#`` (yes, the script reuses the prefix).
+      2. `/etc/sontoloyo/xray.users` — operator-managed plain list.
+      3. `/usr/local/etc/xray/config.json` — vanilla Xray config: count
+         the `"email"` fields.
+      4. `/etc/xray/config.json` — alternate path used by some installers.
+    """
+    # 1) Premium auto-installer DB
+    f = "/etc/xray/.userall.db"
+    if os.path.isfile(f):
+        try:
+            with open(f) as fp:
+                n = sum(1 for ln in fp if ln.strip().startswith("#ssh#"))
+            if n > 0:
+                return n
+        except Exception:
+            pass
+
+    # 2) Sontoloyo-managed list
     f = "/etc/sontoloyo/xray.users"
     if os.path.isfile(f):
         try:
@@ -158,13 +252,18 @@ def _total_xray_accounts() -> int:
                 return sum(1 for ln in fp if ln.strip() and not ln.startswith("#"))
         except Exception:
             pass
-    cfg = "/usr/local/etc/xray/config.json"
-    if os.path.isfile(cfg):
-        try:
-            with open(cfg) as fp:
-                return len(re.findall(r'"email"\s*:\s*"', fp.read()))
-        except Exception:
-            return 0
+
+    # 3) Vanilla Xray config — count "email" entries
+    for cfg in ("/usr/local/etc/xray/config.json", "/etc/xray/config.json"):
+        if os.path.isfile(cfg):
+            try:
+                with open(cfg) as fp:
+                    n = len(re.findall(r'"email"\s*:\s*"', fp.read()))
+                if n > 0:
+                    return n
+            except Exception:
+                continue
+
     return 0
 
 
@@ -177,7 +276,7 @@ def health():
 @app.get("/api/status")
 def status_endpoint(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
     _check_key(x_api_key)
-    rx, tx = _net_rx_tx()
+    rx, tx = _vnstat_total()
     ssh_online = _ssh_online()
     xray_online = _xray_online()
     return {
@@ -214,7 +313,7 @@ def system(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
 @app.get("/api/traffic")
 def traffic(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
     _check_key(x_api_key)
-    rx, tx = _net_rx_tx()
+    rx, tx = _vnstat_total()
     return {"rx": rx, "tx": tx, "speed": _nic_speed_mbps()}
 
 
