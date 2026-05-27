@@ -25,7 +25,8 @@ JSON shape returned by /api/status:
   "speed": 940,               // rough Mb/s (NIC speed)
   "rx": 12345678,             // bytes
   "tx": 87654321,             // bytes
-  "active_users": 87,         // SSH + Xray online sessions
+  "active_users": 29,         // active subscribers (registered, NOT expired)
+  "online_now": 3,            // live online sessions right now
   "ssh": true, "xray": true, "nginx": true, "udp": false,
   "total_ssh": 120, "total_xray": 80
 }
@@ -39,6 +40,7 @@ import time
 import socket
 import subprocess
 import threading
+from datetime import datetime
 from typing import Optional, Callable, TypeVar
 
 import psutil
@@ -174,6 +176,76 @@ def _count_pattern(cmd: str) -> int:
 
 def _ssh_online() -> int:
     return _count_pattern("ps -ef | grep -E 'sshd:.*@' | grep -v grep || true")
+
+
+# ─────────────────── expiry-aware account counters ────────────────────────
+# Lines from /etc/ssh/.ssh.db look like (Premium auto-installer convention):
+#   #ssh# KukkVIP   PfremID 0 2 13 May, 2026
+#   #ssh# trial     whus
+# Lines from /etc/xray/.userall.db follow the same shape but often omit
+# the trailing date when the account is set as lifetime / non-expiring.
+#
+# To match the "ACCOUNT" number shown in the Premium auto-installer's
+# main menu, we count lines whose embedded expiry date is today-or-later,
+# and treat lines without any parseable date as still-active (lifetime).
+
+_MONTHS = {
+    "jan": 1,  "feb": 2,  "mar": 3,  "apr": 4,  "may": 5,  "jun": 6,
+    "jul": 7,  "aug": 8,  "sep": 9,  "oct": 10, "nov": 11, "dec": 12,
+    # Indonesian month names sometimes used by localized installers.
+    "januari": 1, "februari": 2, "maret": 3, "april": 4, "mei": 5,
+    "juni": 6, "juli": 7, "agustus": 8, "september": 9, "oktober": 10,
+    "november": 11, "desember": 12,
+}
+
+# Matches "13 May, 2026", "13 May 2026", "13 Mei 2026", etc.
+_EXPIRY_RE = re.compile(
+    r"\b(\d{1,2})\s+([A-Za-z]+),?\s+(\d{4})\b"
+)
+
+
+def _parse_expiry(line: str) -> Optional[datetime]:
+    """Return the expiry ``datetime`` embedded in ``line``, or None.
+
+    None means "no parseable date" — caller decides whether to treat the
+    line as a lifetime account (count it) or skip it. We count it.
+    """
+    m = _EXPIRY_RE.search(line)
+    if not m:
+        return None
+    day_s, mon_s, year_s = m.group(1), m.group(2).lower(), m.group(3)
+    mon = _MONTHS.get(mon_s) or _MONTHS.get(mon_s[:3])
+    if not mon:
+        return None
+    try:
+        return datetime(int(year_s), mon, int(day_s))
+    except ValueError:
+        return None
+
+
+def _count_active_in_db(path: str) -> int:
+    """Count #ssh#-prefixed lines in ``path`` that are not yet expired.
+
+    A line is considered active when:
+      * it starts with ``#ssh#`` (the Premium installer's marker), AND
+      * either contains no parseable date (lifetime) OR its date is
+        today-or-later in the agent's local timezone.
+    """
+    if not os.path.isfile(path):
+        return 0
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    n = 0
+    try:
+        with open(path) as fp:
+            for line in fp:
+                if not line.strip().startswith("#ssh#"):
+                    continue
+                expiry = _parse_expiry(line)
+                if expiry is None or expiry >= today:
+                    n += 1
+    except Exception:
+        return 0
+    return n
 
 
 def _xray_online() -> int:
@@ -336,10 +408,18 @@ def _build_status_payload() -> dict:
     Held behind ``_cached`` (default 3 s) so repeated polls from the
     dashboard return instantly without re-running cek-vme / vnstat /
     ping / cpu_percent on every request. Tuned via SONTOLOYO_CACHE_TTL.
+
+    ``active_users`` is the count of *active subscribers* — registered
+    accounts that are not yet expired — so it matches the "ACCOUNT"
+    number shown in the Premium auto-installer's main menu. The live
+    online-session count (the old meaning) is still exposed as
+    ``online_now`` for callers that want it.
     """
     rx, tx = _vnstat_total()
-    ssh_online = _ssh_online()
-    xray_online = _xray_online()
+    online_ssh = _ssh_online()
+    online_xray = _xray_online()
+    active_ssh = _count_active_in_db("/etc/ssh/.ssh.db")
+    active_xray = _count_active_in_db("/etc/xray/.userall.db")
     # Non-blocking CPU read — uses the delta since the previous snapshot
     # (which the cache keeps refreshed every few seconds), so we avoid
     # the 200 ms blocking sample on the request hot path.
@@ -352,7 +432,11 @@ def _build_status_payload() -> dict:
         "ping": _gateway_ping_ms(),
         "speed": _nic_speed_mbps(),
         "rx": rx, "tx": tx,
-        "active_users": ssh_online + xray_online,
+        # Slot count shown on the dashboard: active subscribers (matches
+        # the Premium menu's ACCOUNT number). Falls back to the live
+        # online count when the Premium DB files aren't present.
+        "active_users": (active_ssh + active_xray) or (online_ssh + online_xray),
+        "online_now": online_ssh + online_xray,
         "ssh":   _service_active("ssh") or _service_active("sshd"),
         "xray":  _service_active("xray"),
         "nginx": _service_active("nginx"),
