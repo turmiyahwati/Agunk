@@ -38,7 +38,8 @@ import json
 import time
 import socket
 import subprocess
-from typing import Optional
+import threading
+from typing import Optional, Callable, TypeVar
 
 import psutil
 from fastapi import FastAPI, Header, HTTPException, status
@@ -47,7 +48,38 @@ API_KEY = os.environ.get("SONTOLOYO_API_KEY", "change-me")
 HOST = os.environ.get("SONTOLOYO_HOST", "0.0.0.0")
 PORT = int(os.environ.get("SONTOLOYO_PORT", "8787"))
 
+# Per-call result cache (TTL seconds). Lets us make /api/status return in
+# milliseconds even though the underlying probes (cek-vme, vnstat, ping)
+# are slow subprocess calls. Tuned via SONTOLOYO_CACHE_TTL.
+_CACHE_TTL = float(os.environ.get("SONTOLOYO_CACHE_TTL", "3"))
+_cache: dict[str, tuple[float, object]] = {}
+_cache_lock = threading.Lock()
+
+T = TypeVar("T")
+
+
+def _cached(key: str, ttl: float, producer: Callable[[], T]) -> T:
+    """Memoize ``producer()`` under ``key`` for ``ttl`` seconds.
+
+    Thread-safe; under contention every caller waits for one producer
+    invocation, so we never run two cek-vme in parallel during a burst.
+    """
+    now = time.time()
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit is not None and now - hit[0] < ttl:
+            return hit[1]  # type: ignore[return-value]
+    value = producer()
+    with _cache_lock:
+        _cache[key] = (time.time(), value)
+    return value
+
+
 app = FastAPI(title="Sontoloyo VPS Agent", version="1.0.0")
+
+# Prime the per-process CPU sampler so the first request that lands on
+# `psutil.cpu_percent(interval=None)` gets a real value instead of 0.0.
+psutil.cpu_percent(interval=None)
 
 
 # ─────────────────────────── helpers ──────────────────────────────────────
@@ -147,28 +179,47 @@ def _ssh_online() -> int:
 def _xray_online() -> int:
     """Count active Xray (vmess/vless/trojan) connections.
 
-    Prefer parsing the Indonesian Premium auto-installer's compiled
-    `cek-vme` command — its stdout is line-per-connection and shaped
-    like ``943 - 'indoJD' - 127.0.0.1:30544``, which gives us an
-    accurate per-connection count without poking at internal Xray API.
+    Sums per-protocol counts from the Indonesian Premium auto-installer's
+    compiled checker commands when available:
 
-    When `cek-vme` is missing (other VPS distros), fall back to a
-    permissive `ss` query that covers the conventional Xray/HTTPS
-    listener ports plus the local 10000-10010 inbound range used by
+        cek-vme   → active VMESS sessions
+        cek-vle   → active VLESS sessions
+        cek-tro   → active TROJAN sessions
+
+    Each one outputs line-per-connection in the format
+    ``<id> - 'username' - <ip>:<port>``, so summing them yields the total
+    Xray online count that matches the banner shown by the auto-installer
+    menu.
+
+    When *none* of those binaries are available (vanilla VPS), we fall
+    back to a permissive ``ss`` query that covers the conventional Xray /
+    HTTPS listener ports plus the local 10000-10010 inbound range used by
     haproxy → xray pipelines.
     """
-    # 1) Premium / FuxiVPS / Vladiyot family — `cek-vme` is the source of truth
-    try:
-        out = subprocess.check_output(
-            ["cek-vme"], text=True, timeout=5, stdin=subprocess.DEVNULL,
-        )
-        count = sum(1 for line in out.splitlines() if "'" in line and " - " in line)
-        if count > 0:
-            return count
-    except Exception:
-        pass
 
-    # 2) Generic fallback — ss-based connection count on Xray ports
+    def _count_cek(cmd: str) -> Optional[int]:
+        """Run a `cek-*` command. Return its line count, or None on failure."""
+        try:
+            out = subprocess.check_output(
+                [cmd], text=True, timeout=5, stdin=subprocess.DEVNULL,
+            )
+        except Exception:
+            return None
+        return sum(1 for line in out.splitlines() if "'" in line and " - " in line)
+
+    total = 0
+    matched_any = False
+    for cmd in ("cek-vme", "cek-vle", "cek-tro"):
+        n = _count_cek(cmd)
+        if n is None:
+            continue
+        matched_any = True
+        total += n
+
+    if matched_any:
+        return total
+
+    # Generic fallback — ss-based connection count on Xray ports
     return _count_pattern(
         "ss -tn state established '( sport = :443 or sport = :80 or sport = :8443 "
         "or ( sport >= :10000 and sport <= :10010 ) )' "
@@ -276,13 +327,27 @@ def health():
 @app.get("/api/status")
 def status_endpoint(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
     _check_key(x_api_key)
+    return _cached("status", _CACHE_TTL, _build_status_payload)
+
+
+def _build_status_payload() -> dict:
+    """Heavy lifting that backs ``GET /api/status``.
+
+    Held behind ``_cached`` (default 3 s) so repeated polls from the
+    dashboard return instantly without re-running cek-vme / vnstat /
+    ping / cpu_percent on every request. Tuned via SONTOLOYO_CACHE_TTL.
+    """
     rx, tx = _vnstat_total()
     ssh_online = _ssh_online()
     xray_online = _xray_online()
+    # Non-blocking CPU read — uses the delta since the previous snapshot
+    # (which the cache keeps refreshed every few seconds), so we avoid
+    # the 200 ms blocking sample on the request hot path.
+    cpu = psutil.cpu_percent(interval=None)
     return {
         "ok": True,
         "uptime": int(time.time() - psutil.boot_time()),
-        "cpu": psutil.cpu_percent(interval=0.2),
+        "cpu": cpu,
         "ram": psutil.virtual_memory().percent,
         "ping": _gateway_ping_ms(),
         "speed": _nic_speed_mbps(),
