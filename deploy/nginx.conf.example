@@ -1,0 +1,87 @@
+# ─────────────────────────────────────────────────────────────────────────
+# Agunk dashboard — nginx reverse proxy template
+#
+# Save as:   /etc/nginx/sites-available/agunk
+# Enable:    sudo ln -s /etc/nginx/sites-available/agunk /etc/nginx/sites-enabled/agunk
+# Reload:    sudo nginx -t && sudo systemctl reload nginx
+#
+# Replace `your-domain.com` with your real domain (the one pointed to this
+# VPS via Cloudflare DNS). TLS termination is handled by Cloudflare in
+# "Full (strict)" mode using either certbot or a Cloudflare origin cert.
+# ─────────────────────────────────────────────────────────────────────────
+
+# Redirect plain HTTP to HTTPS (Cloudflare also enforces "Always Use HTTPS").
+server {
+    listen 80;
+    listen [::]:80;
+    server_name your-domain.com;
+    return 301 https://$host$request_uri;
+}
+
+# Trust Cloudflare's edge IPs so $remote_addr = real visitor IP.
+# (Update list periodically: https://www.cloudflare.com/ips/)
+set_real_ip_from 173.245.48.0/20;
+set_real_ip_from 103.21.244.0/22;
+set_real_ip_from 103.22.200.0/22;
+set_real_ip_from 103.31.4.0/22;
+set_real_ip_from 141.101.64.0/18;
+set_real_ip_from 108.162.192.0/18;
+set_real_ip_from 190.93.240.0/20;
+set_real_ip_from 188.114.96.0/20;
+set_real_ip_from 197.234.240.0/22;
+set_real_ip_from 198.41.128.0/17;
+set_real_ip_from 162.158.0.0/15;
+set_real_ip_from 104.16.0.0/13;
+set_real_ip_from 104.24.0.0/14;
+set_real_ip_from 172.64.0.0/13;
+set_real_ip_from 131.0.72.0/22;
+real_ip_header CF-Connecting-IP;
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name your-domain.com;
+
+    # ── TLS ─────────────────────────────────────────────
+    # Option A: certbot
+    #   sudo certbot --nginx -d your-domain.com
+    # Option B: Cloudflare origin certificate (Full strict)
+    ssl_certificate     /etc/ssl/cloudflare/your-domain.pem;
+    ssl_certificate_key /etc/ssl/cloudflare/your-domain.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_session_cache shared:SSL:10m;
+
+    # ── Security headers ────────────────────────────────
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # ── Reasonable upload limit / timeouts ──────────────
+    client_max_body_size 5m;
+    proxy_read_timeout 60s;
+    proxy_send_timeout 60s;
+
+    # ── Reverse proxy → Next.js (PM2) ───────────────────
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Required for Next.js HMR / future websocket usage
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    # Static assets — let Next.js handle caching headers itself.
+    location /_next/static/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_cache_valid 200 1y;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+}

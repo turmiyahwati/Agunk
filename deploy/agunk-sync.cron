@@ -1,0 +1,24 @@
+# ─────────────────────────────────────────────────────────────────────────
+# Agunk dashboard — external cron trigger for /api/monitor/sync
+#
+# Install:
+#   sudo cp deploy/agunk-sync.cron /etc/cron.d/agunk-sync
+#   # then edit the file: replace YOUR_TOKEN and your-domain.com
+#   sudo systemctl restart cron
+#
+# What it does:
+#   Every minute, hits POST /api/monitor/sync on the dashboard. The route
+#   accepts the request because of the X-Sync-Token header (matches the
+#   MONITOR_SYNC_TOKEN value in your dashboard .env).
+#
+# The dashboard then iterates every enabled server and pulls /api/status
+# from each VPS agent in parallel. UI auto-updates on the next poll.
+# ─────────────────────────────────────────────────────────────────────────
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# m h dom mon dow user  command
+*  *  *  *  *  root  curl -fsS --max-time 30 \
+    -H "X-Sync-Token: YOUR_TOKEN" \
+    -X POST https://your-domain.com/api/monitor/sync \
+    >/var/log/agunk-sync.log 2>&1

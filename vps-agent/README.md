@@ -77,16 +77,28 @@ systemctl restart agunk-agent
 sudo bash uninstall.sh
 ```
 
-## Account totals (optional)
+## Data sources
 
-For accurate `total_ssh` and `total_xray`, drop one user per line in:
+The agent is **read-only**. It never creates / modifies / deletes accounts —
+it only reads from the standard tools your VPN script already maintains:
 
-- `/etc/agunk/ssh.users`
-- `/etc/agunk/xray.users`
+| Metric                | Source                                                    |
+| --------------------- | --------------------------------------------------------- |
+| `cpu`, `ram`, `uptime`| `psutil`                                                  |
+| `ssh`/`xray`/`nginx`/`udp` | `systemctl is-active <name>`                         |
+| `ping`                | `ping` to default gateway                                 |
+| `speed`               | NIC link speed via `psutil.net_if_stats()`                |
+| `rx` / `tx`           | `vnstat --json d 1` (today). Falls back to psutil since-boot if `vnstat` is not installed. |
+| `total_ssh`           | `/etc/ssh/.ssh.db` → `/etc/agunk/ssh.users` → `/etc/passwd` (uid≥1000) |
+| `total_xray`          | `/etc/xray/.userall.db` → `/etc/agunk/xray.users` → `"email"` entries in `/usr/local/etc/xray/config.json` |
+| `active_users`        | `cek-vme` if available, else `ps`/`ss` heuristic          |
 
-If those files are missing, the agent falls back to:
-- SSH: count of `/etc/passwd` users with `uid>=1000` and a real shell.
-- Xray: count of `"email"` entries in `/usr/local/etc/xray/config.json`.
+The `.ssh.db` / `.userall.db` files are the de-facto convention used by the
+common VPN install scripts; each account is one line starting with `###`
+(or `#&`). The agent simply counts those lines.
+
+> **Port note**: agent defaults to **8787**. Your provisioning API on
+> **5888** is untouched — they run side by side.
 
 ## Security
 

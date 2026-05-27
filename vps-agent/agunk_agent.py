@@ -4,6 +4,17 @@ Agunk VPS Agent — minimal monitoring API for VPN/Xray nodes.
 Runs on the VPS (Debian/Ubuntu). Exposes a small HTTP API that the Agunk
 website polls. All endpoints (except /health) require an X-API-Key header.
 
+This agent is **read-only**. It never creates, modifies, or deletes VPN
+accounts; it only reads metrics from existing system tools (psutil, ss, ps,
+vnstat, systemctl) and the standard VPN script databases:
+
+    /etc/ssh/.ssh.db       → SSH/SSL/WS account list
+    /etc/xray/.userall.db  → Xray (vmess/vless/trojan) account list
+    cek-vme                → optional helper command (active sessions)
+
+It listens on port 8787 by default and is independent from the provisioning
+API on port 5888 — they coexist without conflict.
+
 JSON shape returned by /api/status (consumed by Agunk):
 
 {
@@ -13,8 +24,8 @@ JSON shape returned by /api/status (consumed by Agunk):
   "ram": 41.2,                # percent
   "ping": 14,                 # ms (gateway)
   "speed": 940,               # rough Mb/s (NIC speed)
-  "rx": 12345678,             # bytes
-  "tx": 87654321,             # bytes
+  "rx": 12345678,             # bytes (today via vnstat, fallback: since-boot)
+  "tx": 87654321,             # bytes (today via vnstat, fallback: since-boot)
   "active_users": 87,         # SSH + Xray online sessions
   "ssh": true, "xray": true, "nginx": true, "udp": false,
   "total_ssh": 120, "total_xray": 80
@@ -22,12 +33,14 @@ JSON shape returned by /api/status (consumed by Agunk):
 """
 from __future__ import annotations
 
+import json
 import os
 import re
-import time
+import shutil
 import socket
 import subprocess
-from typing import Optional
+import time
+from typing import Optional, Tuple
 
 import psutil
 from fastapi import FastAPI, Header, HTTPException, status
@@ -36,7 +49,7 @@ API_KEY = os.environ.get("AGUNK_API_KEY", "change-me")
 HOST = os.environ.get("AGUNK_HOST", "0.0.0.0")
 PORT = int(os.environ.get("AGUNK_PORT", "8787"))
 
-app = FastAPI(title="Agunk VPS Agent", version="1.0.0")
+app = FastAPI(title="Agunk VPS Agent", version="1.1.0")
 
 
 # ─────────────────────────── helpers ──────────────────────────────────────
@@ -45,20 +58,33 @@ def _check_key(key: Optional[str]) -> None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid api key")
 
 
-def _service_active(name: str) -> bool:
+def _has(cmd: str) -> bool:
+    return shutil.which(cmd) is not None
+
+
+def _run(args, timeout: float = 3.0) -> str:
+    """Run a command and return stdout (empty string on error)."""
     try:
         out = subprocess.run(
-            ["systemctl", "is-active", name],
-            capture_output=True, text=True, timeout=2,
+            args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            shell=isinstance(args, str),
         )
-        return out.stdout.strip() == "active"
+        return out.stdout or ""
     except Exception:
-        return False
+        return ""
+
+
+def _service_active(name: str) -> bool:
+    out = _run(["systemctl", "is-active", name], timeout=2)
+    return out.strip() == "active"
 
 
 def _udp_active() -> bool:
     # heuristic: any of these UDP services running?
-    for n in ("udp-custom", "udp-mini", "badvpn-udpgw", "udp-zivpn"):
+    for n in ("udp-custom", "udp-mini", "badvpn-udpgw", "udp-zivpn", "zivpn"):
         if _service_active(n):
             return True
     return False
@@ -66,16 +92,10 @@ def _udp_active() -> bool:
 
 def _gateway_ping_ms() -> int:
     try:
-        # 1 packet, 1s deadline, ping the default gateway
-        gw = subprocess.check_output(
-            "ip route | awk '/default/ {print $3; exit}'",
-            shell=True, text=True, timeout=2,
-        ).strip()
+        gw = _run("ip route | awk '/default/ {print $3; exit}'", timeout=2).strip()
         if not gw:
             return 0
-        out = subprocess.check_output(
-            ["ping", "-c", "1", "-W", "1", gw], text=True, timeout=3,
-        )
+        out = _run(["ping", "-c", "1", "-W", "1", gw], timeout=3)
         m = re.search(r"time=([\d.]+) ?ms", out)
         return int(float(m.group(1))) if m else 0
     except Exception:
@@ -94,42 +114,91 @@ def _nic_speed_mbps() -> int:
     return 0
 
 
-def _net_rx_tx() -> tuple[int, int]:
+def _net_rx_tx_since_boot() -> Tuple[int, int]:
     n = psutil.net_io_counters()
     return int(n.bytes_recv), int(n.bytes_sent)
 
 
-def _count_pattern(cmd: str) -> int:
+def _vnstat_today_rx_tx() -> Optional[Tuple[int, int]]:
+    """Today's RX/TX in bytes via `vnstat --json d 1`. None if unavailable."""
+    if not _has("vnstat"):
+        return None
     try:
-        out = subprocess.check_output(cmd, shell=True, text=True, timeout=3)
-        return sum(1 for ln in out.splitlines() if ln.strip())
+        raw = _run(["vnstat", "--json", "d", "1"], timeout=3)
+        if not raw.strip():
+            return None
+        data = json.loads(raw)
+        ifaces = data.get("interfaces") or []
+        for it in ifaces:
+            if it.get("name") == "lo":
+                continue
+            days = (it.get("traffic") or {}).get("day") or []
+            if not days:
+                continue
+            today = days[-1]
+            rx = int(today.get("rx", 0))
+            tx = int(today.get("tx", 0))
+            # vnstat ≥2 returns bytes already. older versions return KiB; normalise.
+            if rx < 1024 and tx < 1024:
+                # very small — could still be bytes; leave as-is
+                pass
+            return rx, tx
+        return None
+    except Exception:
+        return None
+
+
+def _net_rx_tx() -> Tuple[int, int]:
+    """Prefer today's traffic via vnstat; fall back to cumulative since boot."""
+    today = _vnstat_today_rx_tx()
+    if today is not None:
+        return today
+    return _net_rx_tx_since_boot()
+
+
+def _count_lines(text: str) -> int:
+    return sum(1 for ln in text.splitlines() if ln.strip())
+
+
+# ─────────────────────────── account counters ─────────────────────────────
+# VPN scripts (autoscript / sshvpn / xray-installer) keep account databases as
+# plain-text files where each entry starts with `###` or `#&`. Format examples:
+#
+#   /etc/ssh/.ssh.db
+#       ### Member alice 2026-01-31
+#       ### Member bob   2026-02-15
+#
+#   /etc/xray/.userall.db
+#       ### vmess  alice 2026-01-31
+#       ### vless  bob   2026-02-15
+#       ### trojan eve   2026-03-01
+#
+# We just count those lines. Comments / blank lines are ignored.
+def _count_db_accounts(path: str) -> int:
+    if not os.path.isfile(path):
+        return 0
+    try:
+        n = 0
+        with open(path, "r", errors="ignore") as fp:
+            for ln in fp:
+                s = ln.strip()
+                if s.startswith("###") or s.startswith("#&"):
+                    n += 1
+        return n
     except Exception:
         return 0
 
 
-def _ssh_online() -> int:
-    # users connected via sshd
-    return _count_pattern("ps -ef | grep -E 'sshd:.*@' | grep -v grep || true")
-
-
-def _xray_online() -> int:
-    # heuristic: count established connections to xray ports (handles common ports)
-    return _count_pattern(
-        "ss -tn state established '( sport = :443 or sport = :80 or sport = :8443 )' "
-        "| tail -n +2 || true"
-    )
-
-
 def _total_ssh_accounts() -> int:
-    # Common convention on VPN scripts: usernames stored in /etc/agunk/ssh.users (or /etc/passwd by uid range)
-    f = "/etc/agunk/ssh.users"
-    if os.path.isfile(f):
-        try:
-            with open(f) as fp:
-                return sum(1 for ln in fp if ln.strip() and not ln.startswith("#"))
-        except Exception:
-            return 0
-    # fallback: count regular users with shell access (uid>=1000)
+    # 1) Standard VPN-script database
+    n = _count_db_accounts("/etc/ssh/.ssh.db")
+    if n:
+        return n
+    # 2) Optional Agunk override
+    n = _count_db_accounts("/etc/agunk/ssh.users")
+    if n:
+        return n
+    # 3) Fallback: count regular interactive users (uid>=1000)
     try:
         n = 0
         with open("/etc/passwd") as fp:
@@ -147,22 +216,71 @@ def _total_ssh_accounts() -> int:
 
 
 def _total_xray_accounts() -> int:
-    # Convention: one line per account in /etc/agunk/xray.users  OR count "email" entries in xray config
-    f = "/etc/agunk/xray.users"
-    if os.path.isfile(f):
-        try:
-            with open(f) as fp:
-                return sum(1 for ln in fp if ln.strip() and not ln.startswith("#"))
-        except Exception:
-            pass
+    # 1) Standard Xray script database (covers vmess + vless + trojan)
+    n = _count_db_accounts("/etc/xray/.userall.db")
+    if n:
+        return n
+    # 2) Optional Agunk override
+    n = _count_db_accounts("/etc/agunk/xray.users")
+    if n:
+        return n
+    # 3) Fallback: count "email" entries in xray config.json
     cfg = "/usr/local/etc/xray/config.json"
     if os.path.isfile(cfg):
         try:
-            with open(cfg) as fp:
+            with open(cfg, "r", errors="ignore") as fp:
                 return len(re.findall(r'"email"\s*:\s*"', fp.read()))
         except Exception:
             return 0
     return 0
+
+
+# ─────────────────────────── online counters ──────────────────────────────
+def _ssh_online() -> int:
+    # users connected via sshd  (e.g. "sshd: alice [priv]@pts/0")
+    out = _run("ps -ef | grep -E 'sshd:.*@' | grep -v grep || true", timeout=2)
+    return _count_lines(out)
+
+
+def _xray_online() -> int:
+    # established TCP connections to common Xray ports
+    out = _run(
+        "ss -tn state established "
+        "'( sport = :443 or sport = :80 or sport = :8443 or sport = :2083 or sport = :2087 )' "
+        "| tail -n +2 || true",
+        timeout=2,
+    )
+    return _count_lines(out)
+
+
+def _cek_vme_active() -> Optional[int]:
+    """If `cek-vme` exists on the VPS, try to read total active sessions from it.
+
+    The output format varies between scripts, so we use a permissive heuristic:
+    count lines that look like an active user row (contain 'ON' or a bullet).
+    Returns None if the command is missing or output cannot be parsed.
+    """
+    if not _has("cek-vme"):
+        return None
+    out = _run(["cek-vme"], timeout=4)
+    if not out.strip():
+        return None
+    n = 0
+    for ln in out.splitlines():
+        s = ln.strip()
+        if not s or s.startswith(("=", "-", "─")):
+            continue
+        if "ON" in s.split() or "●" in s or "✔" in s or "ACTIVE" in s.upper():
+            n += 1
+    return n if n > 0 else None
+
+
+def _active_users_total() -> int:
+    """Best-effort active session count: prefer cek-vme, else ss/ps based count."""
+    via_cek = _cek_vme_active()
+    if via_cek is not None:
+        return via_cek
+    return _ssh_online() + _xray_online()
 
 
 # ─────────────────────────── routes ───────────────────────────────────────
@@ -175,8 +293,6 @@ def health():
 def status_endpoint(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
     _check_key(x_api_key)
     rx, tx = _net_rx_tx()
-    ssh_online = _ssh_online()
-    xray_online = _xray_online()
     return {
         "ok": True,
         "uptime": int(time.time() - psutil.boot_time()),
@@ -185,7 +301,7 @@ def status_endpoint(x_api_key: Optional[str] = Header(default=None, alias="X-API
         "ping": _gateway_ping_ms(),
         "speed": _nic_speed_mbps(),
         "rx": rx, "tx": tx,
-        "active_users": ssh_online + xray_online,
+        "active_users": _active_users_total(),
         "ssh":   _service_active("ssh") or _service_active("sshd"),
         "xray":  _service_active("xray"),
         "nginx": _service_active("nginx"),
@@ -213,13 +329,19 @@ def system(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
 def traffic(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
     _check_key(x_api_key)
     rx, tx = _net_rx_tx()
-    return {"rx": rx, "tx": tx, "speed": _nic_speed_mbps()}
+    src = "vnstat" if _vnstat_today_rx_tx() is not None else "psutil"
+    return {"rx": rx, "tx": tx, "speed": _nic_speed_mbps(), "source": src}
 
 
 @app.get("/api/online")
 def online(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
     _check_key(x_api_key)
-    return {"ssh": _ssh_online(), "xray": _xray_online()}
+    return {
+        "ssh": _ssh_online(),
+        "xray": _xray_online(),
+        "cek_vme": _cek_vme_active(),
+        "active_users": _active_users_total(),
+    }
 
 
 if __name__ == "__main__":
