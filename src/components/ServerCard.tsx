@@ -10,7 +10,7 @@ import { flagUrl, slotPercent, formatBytes, formatUptime } from "@/lib/utils";
 export type ServerSummary = {
   id: string;
   name: string;
-  domain: string;
+  domain?: string;          // admin-only; public endpoint hides this
   country: string;
   countryName: string;
   flag?: string | null;

@@ -64,8 +64,9 @@ export function Sidebar({ items, open, onClose }: { items: NavItem[]; open?: boo
           })}
         </nav>
         <div className="mt-auto absolute bottom-4 left-4 right-4 rounded-xl border border-white/5 bg-white/[0.02] p-3 text-[11px] text-slate-500">
-          <div className="font-semibold text-slate-300">Agunk Monitor</div>
+          <div className="font-semibold text-slate-300">PT SONTOLOYO Monitor</div>
           v1.0 · Realtime VPS health
+          <div className="mt-1 text-[10px] text-slate-600">by PAKDE XRESX DIGITAL STORE</div>
         </div>
       </aside>
     </>

@@ -15,8 +15,10 @@ export async function GET() {
   const servers = await prisma.server.findMany({
     where: { enabled: true },
     orderBy: [{ status: "asc" }, { name: "asc" }],
+    // Public/member view: NEVER expose domain/IP, agent base URL, or API key.
+    // Admin endpoints (/api/servers, /api/servers/:id) return those for admins only.
     select: {
-      id: true, name: true, domain: true, country: true, countryName: true,
+      id: true, name: true, country: true, countryName: true,
       flag: true, provider: true, maxSlot: true, status: true, activeUsers: true,
       pingMs: true, speedMbps: true, rxBytes: true, txBytes: true, uptimeSec: true,
       cpuPercent: true, ramPercent: true, sshActive: true, xrayActive: true,

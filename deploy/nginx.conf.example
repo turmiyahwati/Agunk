@@ -1,22 +1,33 @@
 # ─────────────────────────────────────────────────────────────────────────
-# Agunk dashboard — nginx reverse proxy template
+# PT SONTOLOYO Monitor — nginx reverse proxy template
+# Developed by PAKDE XRESX DIGITAL STORE
 #
-# Save as:   /etc/nginx/sites-available/agunk
-# Enable:    sudo ln -s /etc/nginx/sites-available/agunk /etc/nginx/sites-enabled/agunk
-# Reload:    sudo nginx -t && sudo systemctl reload nginx
+# Save as:   /etc/nginx/sites-available/ptsontoloyo-monitor
+# Enable:    ln -sf /etc/nginx/sites-available/ptsontoloyo-monitor \
+#                   /etc/nginx/sites-enabled/ptsontoloyo-monitor
+# Reload:    nginx -t && systemctl reload nginx
 #
-# Replace `your-domain.com` with your real domain (the one pointed to this
-# VPS via Cloudflare DNS). TLS termination is handled by Cloudflare in
-# "Full (strict)" mode using either certbot or a Cloudflare origin cert.
+# Replace `your-domain.com` with your real domain (pointed to this VPS via
+# Cloudflare DNS). TLS termination uses Cloudflare in "Full (strict)" mode
+# with either certbot or a Cloudflare origin certificate.
+#
+# This template includes:
+#   • Cloudflare real-IP restoration
+#   • Modern TLS + HSTS + standard security headers
+#   • Rate limit (general)         → 30 req/s per IP
+#   • Rate limit (login brute force) → 5 req/min per IP on /api/auth/*
+#   • server_tokens off (hide nginx version)
 # ─────────────────────────────────────────────────────────────────────────
 
-# Redirect plain HTTP to HTTPS (Cloudflare also enforces "Always Use HTTPS").
-server {
-    listen 80;
-    listen [::]:80;
-    server_name your-domain.com;
-    return 301 https://$host$request_uri;
-}
+# Hide nginx version on errors / Server header
+# (this directive must live in http {} - put in /etc/nginx/nginx.conf if not already)
+# server_tokens off;
+
+# ── Rate limit zones (must be in http context) ──────────
+# Put these two `limit_req_zone` lines in /etc/nginx/nginx.conf inside http{}
+# OR uncomment them below if you have nginx configured to allow them here.
+# limit_req_zone $binary_remote_addr zone=ptsontoloyo_general:10m rate=30r/s;
+# limit_req_zone $binary_remote_addr zone=ptsontoloyo_login:10m   rate=5r/m;
 
 # Trust Cloudflare's edge IPs so $remote_addr = real visitor IP.
 # (Update list periodically: https://www.cloudflare.com/ips/)
@@ -37,34 +48,65 @@ set_real_ip_from 172.64.0.0/13;
 set_real_ip_from 131.0.72.0/22;
 real_ip_header CF-Connecting-IP;
 
+# Redirect plain HTTP → HTTPS (Cloudflare also enforces "Always Use HTTPS").
+server {
+    listen 80;
+    listen [::]:80;
+    server_name your-domain.com;
+    return 301 https://$host$request_uri;
+}
+
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
     server_name your-domain.com;
 
     # ── TLS ─────────────────────────────────────────────
-    # Option A: certbot
-    #   sudo certbot --nginx -d your-domain.com
-    # Option B: Cloudflare origin certificate (Full strict)
+    # Option A: Cloudflare origin certificate (recommended, 15-year cert)
     ssl_certificate     /etc/ssl/cloudflare/your-domain.pem;
     ssl_certificate_key /etc/ssl/cloudflare/your-domain.key;
+    # Option B: certbot (requires temporarily turning off Cloudflare proxy)
+    #   certbot --nginx -d your-domain.com
+
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
     ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
 
     # ── Security headers ────────────────────────────────
     add_header X-Frame-Options SAMEORIGIN always;
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+    add_header X-Powered-By "PT SONTOLOYO Monitor" always;
 
-    # ── Reasonable upload limit / timeouts ──────────────
+    # ── Reasonable limits / timeouts ────────────────────
     client_max_body_size 5m;
     proxy_read_timeout 60s;
     proxy_send_timeout 60s;
+    proxy_connect_timeout 10s;
+
+    # ── Block hidden files / common probes ──────────────
+    location ~ /\.(?!well-known) { deny all; access_log off; return 404; }
+
+    # ── Brute-force protection on auth endpoints ────────
+    # Requires the login rate-limit zone declared in nginx.conf http{}.
+    location /api/auth/ {
+        limit_req zone=ptsontoloyo_login burst=10 nodelay;
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
 
     # ── Reverse proxy → Next.js (PM2) ───────────────────
     location / {
+        limit_req zone=ptsontoloyo_general burst=60 nodelay;
+
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
 
@@ -73,12 +115,12 @@ server {
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
-        # Required for Next.js HMR / future websocket usage
+        # Required for websocket upgrade (Next.js future use)
         proxy_set_header Upgrade    $http_upgrade;
         proxy_set_header Connection "upgrade";
     }
 
-    # Static assets — let Next.js handle caching headers itself.
+    # Static assets — long cache, immutable.
     location /_next/static/ {
         proxy_pass http://127.0.0.1:3000;
         proxy_cache_valid 200 1y;

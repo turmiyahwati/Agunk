@@ -1,0 +1,22 @@
+[Unit]
+Description=PT SONTOLOYO VPS Monitoring Agent (by PAKDE XRESX DIGITAL STORE)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/ptsontoloyo-agent.env
+WorkingDirectory=/opt/ptsontoloyo-agent
+ExecStart=/opt/ptsontoloyo-agent/.venv/bin/python -m uvicorn agunk_agent:app --host ${MONITOR_HOST} --port ${MONITOR_PORT}
+Restart=always
+RestartSec=3
+User=root
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

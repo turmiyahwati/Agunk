@@ -54,7 +54,10 @@ export default function Landing() {
       </section>
 
       <footer className="container mx-auto max-w-6xl border-t border-white/5 px-6 py-8 text-center text-xs text-slate-500">
-        © {new Date().getFullYear()} Agunk Monitor — Built for premium VPN/Xray operators.
+        © {new Date().getFullYear()} PT SONTOLOYO Monitor — Built for premium VPN/Xray operators.
+        <div className="mt-1 text-[10px] text-slate-600">
+          Developed by <span className="text-slate-400">PAKDE XRESX DIGITAL STORE</span>
+        </div>
       </footer>
     </main>
   );

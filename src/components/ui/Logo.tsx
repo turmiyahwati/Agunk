@@ -11,8 +11,8 @@ export function Logo({ size = "md" }: { size?: "sm" | "md" | "lg" }) {
         </svg>
       </div>
       <span className={`font-bold tracking-tight ${cls}`}>
-        <span className="neon-text">Agunk</span>
-        <span className="text-slate-400">·</span>
+        <span className="neon-text">PT SONTOLOYO</span>
+        <span className="text-slate-400 mx-1">·</span>
         <span className="text-slate-300">Monitor</span>
       </span>
     </Link>

@@ -1,10 +1,13 @@
 # ─────────────────────────────────────────────────────────────────────────
-# Agunk dashboard — external cron trigger for /api/monitor/sync
+# PT SONTOLOYO Monitor — external cron trigger for /api/monitor/sync
+# Developed by PAKDE XRESX DIGITAL STORE.
 #
-# Install:
-#   sudo cp deploy/agunk-sync.cron /etc/cron.d/agunk-sync
-#   # then edit the file: replace YOUR_TOKEN and your-domain.com
-#   sudo systemctl restart cron
+# Install (as root):
+#   cp /root/ptsontoloyo-monitor/deploy/ptsontoloyo-sync.cron \
+#      /etc/cron.d/ptsontoloyo-sync
+#   nano /etc/cron.d/ptsontoloyo-sync     # replace YOUR_TOKEN and your-domain.com
+#   chmod 644 /etc/cron.d/ptsontoloyo-sync
+#   systemctl restart cron
 #
 # What it does:
 #   Every minute, hits POST /api/monitor/sync on the dashboard. The route
@@ -21,4 +24,4 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 *  *  *  *  *  root  curl -fsS --max-time 30 \
     -H "X-Sync-Token: YOUR_TOKEN" \
     -X POST https://your-domain.com/api/monitor/sync \
-    >/var/log/agunk-sync.log 2>&1
+    >> /var/log/ptsontoloyo-sync.log 2>&1

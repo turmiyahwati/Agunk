@@ -1,8 +1,10 @@
 """
-Agunk VPS Agent — minimal monitoring API for VPN/Xray nodes.
+PT SONTOLOYO Monitor — VPS Agent.
+Developed by PAKDE XRESX DIGITAL STORE.
 
-Runs on the VPS (Debian/Ubuntu). Exposes a small HTTP API that the Agunk
-website polls. All endpoints (except /health) require an X-API-Key header.
+Minimal monitoring API for VPN/Xray nodes. Runs on the VPS (Debian/Ubuntu)
+and exposes a small HTTP API that the PT SONTOLOYO Monitor dashboard polls.
+All endpoints (except /health) require an X-API-Key header.
 
 This agent is **read-only**. It never creates, modifies, or deletes VPN
 accounts; it only reads metrics from existing system tools (psutil, ss, ps,
@@ -15,7 +17,7 @@ vnstat, systemctl) and the standard VPN script databases:
 It listens on port 8787 by default and is independent from the provisioning
 API on port 5888 — they coexist without conflict.
 
-JSON shape returned by /api/status (consumed by Agunk):
+JSON shape returned by /api/status (consumed by the dashboard):
 
 {
   "ok": true,
@@ -45,11 +47,16 @@ from typing import Optional, Tuple
 import psutil
 from fastapi import FastAPI, Header, HTTPException, status
 
-API_KEY = os.environ.get("AGUNK_API_KEY", "change-me")
-HOST = os.environ.get("AGUNK_HOST", "0.0.0.0")
-PORT = int(os.environ.get("AGUNK_PORT", "8787"))
+# Read MONITOR_* first; fall back to legacy AGUNK_* for backward compat.
+API_KEY = (
+    os.environ.get("MONITOR_API_KEY")
+    or os.environ.get("AGUNK_API_KEY")
+    or "change-me"
+)
+HOST = os.environ.get("MONITOR_HOST") or os.environ.get("AGUNK_HOST") or "0.0.0.0"
+PORT = int(os.environ.get("MONITOR_PORT") or os.environ.get("AGUNK_PORT") or "8787")
 
-app = FastAPI(title="Agunk VPS Agent", version="1.1.0")
+app = FastAPI(title="PT SONTOLOYO Monitor Agent", version="1.2.0")
 
 
 # ─────────────────────────── helpers ──────────────────────────────────────

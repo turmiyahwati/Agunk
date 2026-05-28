@@ -10,7 +10,7 @@ const ServerStatus = {
 const prisma = new PrismaClient();
 
 async function main() {
-  const email = process.env.ADMIN_EMAIL || "admin@agunk.local";
+  const email = process.env.ADMIN_EMAIL || "admin@ptsontoloyo.local";
   const password = process.env.ADMIN_PASSWORD || "admin123";
   const name = process.env.ADMIN_NAME || "Super Admin";
   const hash = await bcrypt.hash(password, 10);
@@ -24,10 +24,10 @@ async function main() {
   // Demo member
   const memberPass = await bcrypt.hash("member123", 10);
   await prisma.user.upsert({
-    where: { email: "member@agunk.local" },
+    where: { email: "member@ptsontoloyo.local" },
     update: {},
     create: {
-      email: "member@agunk.local",
+      email: "member@ptsontoloyo.local",
       password: memberPass,
       role: Role.MEMBER,
       name: "Demo Member",
@@ -38,7 +38,7 @@ async function main() {
   const demos = [
     {
       name: "SG-Premium-01",
-      domain: "sg1.agunk.example",
+      domain: "sg1.internal.local",
       country: "SG",
       countryName: "Singapore",
       provider: "DigitalOcean",
@@ -59,7 +59,7 @@ async function main() {
     },
     {
       name: "ID-Jakarta-01",
-      domain: "jkt1.agunk.example",
+      domain: "jkt1.internal.local",
       country: "ID",
       countryName: "Indonesia",
       provider: "BiznetGio",
@@ -80,7 +80,7 @@ async function main() {
     },
     {
       name: "JP-Tokyo-02",
-      domain: "tyo2.agunk.example",
+      domain: "tyo2.internal.local",
       country: "JP",
       countryName: "Japan",
       provider: "Vultr",
@@ -93,7 +93,7 @@ async function main() {
     },
     {
       name: "US-NewYork-01",
-      domain: "nyc1.agunk.example",
+      domain: "nyc1.internal.local",
       country: "US",
       countryName: "United States",
       provider: "Linode",
@@ -128,7 +128,7 @@ async function main() {
 
   console.log("Seed complete.");
   console.log("Admin :", email, "/", password);
-  console.log("Member: member@agunk.local / member123");
+  console.log("Member: member@ptsontoloyo.local / member123");
 }
 
 main()
