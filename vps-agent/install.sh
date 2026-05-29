@@ -48,7 +48,13 @@ chmod 600 /etc/sontoloyo-agent.env
 echo ">> Installing systemd service..."
 cp "${SRC_DIR}/sontoloyo-agent.service" /etc/systemd/system/sontoloyo-agent.service
 systemctl daemon-reload
-systemctl enable --now sontoloyo-agent.service
+systemctl enable sontoloyo-agent.service
+# Use restart (not "enable --now") so re-installs reload the new env file.
+# `enable --now` is a no-op when the service is already running, which means
+# a fresh install on a host that previously ran the agent will keep the OLD
+# API key in memory while the env file holds the NEW key — leading to
+# `{"detail":"invalid api key"}` on every call. Always restart explicitly.
+systemctl restart sontoloyo-agent.service
 
 if command -v ufw >/dev/null 2>&1; then
   ufw allow "${PORT}/tcp" || true
