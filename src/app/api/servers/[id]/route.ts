@@ -38,7 +38,7 @@ const updateSchema = z.object({
   status: z.enum(["ONLINE", "OFFLINE", "FULL", "WARNING", "UNKNOWN"]).optional(),
   activeUsers: z.number().int().min(0).optional(),
   pingMs: z.number().int().min(0).optional(),
-  speedMbps: z.number().int().min(0).optional(),
+  speedMbps: z.number().min(0).optional(),
 });
 
 export const dynamic = "force-dynamic";
