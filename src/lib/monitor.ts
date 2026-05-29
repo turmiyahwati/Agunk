@@ -22,6 +22,46 @@ export type AgentPayload = {
 const TIMEOUT_MS = Number(process.env.VPS_FETCH_TIMEOUT_MS || 4000);
 const RETRIES = Number(process.env.VPS_FETCH_RETRIES || 2);
 
+/**
+ * Translate the cryptic errors thrown by node fetch / undici into
+ * actionable messages an admin can act on without reading source code.
+ *
+ * The dashboard surfaces this string on the admin Servers page next to
+ * the OFFLINE badge, so it must be self-explanatory.
+ */
+function classifyFetchError(err: unknown, url: string, hadKey: boolean): string {
+  const e = err as { name?: string; message?: string; cause?: { code?: string; message?: string } };
+  const code = e?.cause?.code || "";
+  const msg = String(e?.message || "");
+  const status = msg.match(/^HTTP (\d{3})/)?.[1];
+
+  // HTTP-level errors (we threw these ourselves)
+  if (status === "401") return `HTTP 401 — API key mismatch (check Server "API Key")`;
+  if (status === "403") return `HTTP 403 — agent rejected request (auth or IP allowlist)`;
+  if (status === "404") return `HTTP 404 — wrong path (apiUrl must be base URL like http://host:8787, no /api suffix)`;
+  if (status === "429") return `HTTP 429 — agent rate-limited; reduce poll frequency`;
+  if (status?.startsWith("5")) return `HTTP ${status} — agent crashed; check 'journalctl -u sontoloyo-agent'`;
+
+  // Transport-level errors from undici
+  if (e?.name === "AbortError") return `Timeout ${TIMEOUT_MS}ms — agent unreachable (firewall / wrong port / agent down)`;
+  if (code === "ECONNREFUSED") return `Connection refused — agent not listening on this port`;
+  if (code === "ETIMEDOUT") return `Connection timed out — provider firewall blocks inbound to this port`;
+  if (code === "EHOSTUNREACH") return `Host unreachable — routing issue or provider blocks inter-VPS traffic`;
+  if (code === "ENETUNREACH") return `Network unreachable — DNS or routing fail`;
+  if (code === "ENOTFOUND") return `DNS lookup failed — check hostname in apiUrl`;
+  if (code === "ECONNRESET") return `Connection reset — TLS or proxy mismatch`;
+  if (code === "DEPTH_ZERO_SELF_SIGNED_CERT" || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE") {
+    return `TLS cert error — use http:// for direct port, or fix Cloudflare Origin cert`;
+  }
+
+  if (msg.includes("Invalid URL")) return `Invalid apiUrl format — expected http(s)://host:port`;
+  if (!hadKey) return `Fetch failed (no API key configured) — set "API Key" on this server`;
+
+  // Last resort — surface the raw cause message but trimmed
+  const detail = e?.cause?.message || msg || "unknown";
+  return `Fetch failed — ${String(detail).slice(0, 200)}`;
+}
+
 async function fetchOnce(url: string, apiKey?: string | null) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
@@ -39,8 +79,12 @@ async function fetchOnce(url: string, apiKey?: string | null) {
 }
 
 export async function fetchAgent(baseUrl: string, apiKey?: string | null) {
-  const url = baseUrl.replace(/\/$/, "") + "/api/status";
-  let lastErr: any;
+  // Defensive normalization (the API route also normalizes on save, but a
+  // legacy DB row may still hold a raw value).
+  const normalized = baseUrl.trim().replace(/\/$/, "");
+  const url = (/^https?:\/\//i.test(normalized) ? normalized : `http://${normalized}`) + "/api/status";
+
+  let lastErr: unknown;
   for (let i = 0; i <= RETRIES; i++) {
     try {
       return await fetchOnce(url, apiKey);
@@ -48,7 +92,11 @@ export async function fetchAgent(baseUrl: string, apiKey?: string | null) {
       lastErr = e;
     }
   }
-  throw lastErr;
+  // Re-throw with a friendly classified message; preserve original via cause.
+  const friendly = classifyFetchError(lastErr, url, !!apiKey);
+  const err = new Error(friendly);
+  (err as { cause?: unknown }).cause = lastErr;
+  throw err;
 }
 
 function deriveStatus(active: number, max: number, online: boolean): ServerStatus {

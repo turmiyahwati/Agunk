@@ -5,6 +5,25 @@ import { requireAdmin } from "@/lib/guards";
 import { serializeServers } from "@/lib/serialize";
 import { safeErrorMessage } from "@/lib/api-error";
 
+/**
+ * Forgiving apiUrl validator: users routinely paste bare hosts like
+ *   "1.2.3.4:8787"  or  "agent.example.com/"
+ * We auto-prefix `http://` when missing and strip trailing slashes
+ * before handing the value to Zod's strict URL parser.
+ */
+const apiUrl = z
+  .string()
+  .nullable()
+  .optional()
+  .transform((v) => {
+    if (v == null) return v;
+    const t = v.trim();
+    if (!t) return null;
+    const withScheme = /^https?:\/\//i.test(t) ? t : `http://${t}`;
+    return withScheme.replace(/\/+$/, "");
+  })
+  .pipe(z.string().url().nullable().optional());
+
 const createSchema = z.object({
   name: z.string().min(1),
   domain: z.string().min(1),
@@ -12,7 +31,7 @@ const createSchema = z.object({
   countryName: z.string().min(1),
   flag: z.string().url().nullable().optional(),
   provider: z.string().min(1),
-  apiUrl: z.string().url().nullable().optional(),
+  apiUrl,
   apiKey: z.string().nullable().optional(),
   enabled: z.boolean().optional(),
   refreshMs: z.number().int().min(1000).max(600000).optional(),

@@ -132,10 +132,15 @@ export const WRITE_LIMIT: RateLimitConfig = {
 };
 
 /**
- * External cron / monitor sync trigger. 6 / minute / IP — tighter.
+ * External cron / monitor sync trigger.
+ *
+ * Was 6/min — but a per-minute cron + admin manual button + multiple admin
+ * tabs all hit the same IP and 6 was too tight (caused 429 in normal ops).
+ * 30/min keeps brute-force scrapers out while leaving headroom for legitimate
+ * use including occasional retries.
  */
 export const SYNC_LIMIT: RateLimitConfig = {
   id: "monitor-sync",
-  maxRequests: 6,
+  maxRequests: 30,
   windowSec: 60,
 };
