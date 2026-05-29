@@ -21,8 +21,8 @@ JSON shape returned by /api/status:
   "uptime": 12345,            // seconds
   "cpu": 24.1,                // percent
   "ram": 41.2,                // percent
-  "ping": 14,                 // ms (gateway)
-  "speed": 940,               // rough Mb/s (NIC speed)
+  "ping": 14,                 // ms — gateway → cloudflare → google fallback chain
+  "speed": 12,                // Mbps — live RX+TX throughput delta (not NIC link rate)
   "rx": 12345678,             // bytes
   "tx": 87654321,             // bytes
   "active_users": 29,         // active subscribers (registered, NOT expired)
@@ -109,32 +109,76 @@ def _udp_active() -> bool:
 
 
 def _gateway_ping_ms() -> int:
+    """Latency in ms to the first reachable upstream target.
+
+    Tries default gateway first (fastest, on-net), then well-known public
+    resolvers as fallback. Many VPS providers silently drop ICMP to the
+    gateway address while still allowing it to public IPs, so a single-
+    target ping was reporting 0 in the field.
+    """
+    targets: list[str] = []
     try:
         gw = subprocess.check_output(
             "ip route | awk '/default/ {print $3; exit}'",
             shell=True, text=True, timeout=2,
         ).strip()
-        if not gw:
-            return 0
-        out = subprocess.check_output(
-            ["ping", "-c", "1", "-W", "1", gw], text=True, timeout=3,
-        )
-        m = re.search(r"time=([\d.]+) ?ms", out)
-        return int(float(m.group(1))) if m else 0
-    except Exception:
-        return 0
-
-
-def _nic_speed_mbps() -> int:
-    try:
-        for name, st in psutil.net_if_stats().items():
-            if name == "lo" or not st.isup:
-                continue
-            if st.speed and st.speed > 0:
-                return int(st.speed)
+        if gw:
+            targets.append(gw)
     except Exception:
         pass
+    targets.extend(["1.1.1.1", "8.8.8.8"])
+
+    for target in targets:
+        try:
+            out = subprocess.check_output(
+                ["ping", "-c", "1", "-W", "1", target], text=True, timeout=3,
+            )
+            m = re.search(r"time=([\d.]+) ?ms", out)
+            if m:
+                return int(float(m.group(1)))
+        except Exception:
+            continue
     return 0
+
+
+# Module-level state for instantaneous-throughput computation. Each call to
+# `_throughput_mbps()` measures the byte delta vs the previous call and
+# divides by the elapsed time. Gives a true "speed right now" number that
+# matches the SPEED reading in the Premium auto-installer's main menu.
+_last_net_sample: dict[str, float] = {"rx": 0.0, "tx": 0.0, "ts": 0.0}
+_last_net_lock = threading.Lock()
+
+
+def _throughput_mbps() -> int:
+    """Live network throughput in Mbps (RX + TX combined).
+
+    Uses the byte counters from psutil and returns the delta-per-second
+    as Mbps. The first call has no baseline so it returns 0; subsequent
+    calls (every cache TTL ≈ 3 s) report the average throughput observed
+    over the interval. This replaces the old NIC-link-speed reading,
+    which never changed and gave operators a false impression that the
+    dashboard was static.
+    """
+    n = psutil.net_io_counters()
+    now = time.time()
+    rx = float(n.bytes_recv)
+    tx = float(n.bytes_sent)
+
+    with _last_net_lock:
+        prev_rx = _last_net_sample["rx"]
+        prev_tx = _last_net_sample["tx"]
+        prev_ts = _last_net_sample["ts"]
+        _last_net_sample.update({"rx": rx, "tx": tx, "ts": now})
+
+    if prev_ts == 0:
+        # First sample of the process lifetime — no delta to report yet.
+        return 0
+    dt = now - prev_ts
+    if dt < 0.5:
+        return 0
+    delta_bytes = max(0.0, (rx - prev_rx) + (tx - prev_tx))
+    bits_per_sec = delta_bytes * 8.0 / dt
+    return int(bits_per_sec / 1_000_000)
 
 
 def _net_rx_tx() -> tuple[int, int]:
@@ -430,7 +474,10 @@ def _build_status_payload() -> dict:
         "cpu": cpu,
         "ram": psutil.virtual_memory().percent,
         "ping": _gateway_ping_ms(),
-        "speed": _nic_speed_mbps(),
+        # Live throughput (Mbps) over the last cache window; matches what
+        # the Premium auto-installer banner shows. Replaces the old NIC
+        # link-speed value that made the dashboard look frozen.
+        "speed": _throughput_mbps(),
         "rx": rx, "tx": tx,
         # Slot count shown on the dashboard: active subscribers (matches
         # the Premium menu's ACCOUNT number). Falls back to the live
@@ -463,7 +510,7 @@ def system(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
 def traffic(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
     _check_key(x_api_key)
     rx, tx = _vnstat_total()
-    return {"rx": rx, "tx": tx, "speed": _nic_speed_mbps()}
+    return {"rx": rx, "tx": tx, "speed": _throughput_mbps()}
 
 
 @app.get("/api/online")
