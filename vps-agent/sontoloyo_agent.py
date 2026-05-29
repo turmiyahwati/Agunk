@@ -157,7 +157,15 @@ def _gateway_ping_ms() -> int:
             )
             m = re.search(r"time=([\d.]+) ?ms", out)
             if m:
-                return int(float(m.group(1)))
+                # Floor to 1 ms for any successful reply — internal LAN
+                # gateways routinely respond in sub-millisecond range
+                # (e.g. "time=0.412 ms"). Without this floor, int()
+                # truncated those replies to 0 and the function returned
+                # immediately, skipping the public-target ICMP and TCP
+                # fallbacks below. The dashboard then showed an empty
+                # "—" card even though the host had perfectly good
+                # connectivity.
+                return max(1, int(round(float(m.group(1)))))
         except Exception:
             continue
 
