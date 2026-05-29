@@ -155,7 +155,10 @@ nano .env
 Isi minimal (production):
 
 ```env
-DATABASE_URL="file:./prisma/prod.db"
+# Prisma resolves SQLite paths RELATIVE TO schema.prisma (yaitu folder prisma/).
+# Tulis "file:./prod.db" -> jadi prisma/prod.db.
+# JANGAN tulis "file:./prisma/prod.db" -> akan jadi prisma/prisma/prod.db (bug).
+DATABASE_URL="file:./prod.db"
 
 NEXTAUTH_SECRET="<paste hasil openssl rand -base64 32>"
 NEXTAUTH_URL="https://monitoring.pakde-premium.xyz"
