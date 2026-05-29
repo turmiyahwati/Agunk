@@ -94,10 +94,11 @@ export function ServerForm({
       </Field>
 
       <Field label="VPS Agent base URL">
-        <input className="input" value={v.apiUrl ?? ""} onChange={(e) => set("apiUrl", e.target.value)} placeholder="http://1.2.3.4:8787" />
+        <input className="input" value={v.apiUrl ?? ""} onChange={(e) => set("apiUrl", e.target.value)} placeholder="http://1.2.3.4:8787  atau  https://agent.domain.com" />
+        <p className="mt-1 text-[11px] text-slate-500">Base URL agent, tanpa <code>/api/status</code>. Untuk Cloudflare Tunnel: <code>https://agent.domain.com</code> (port tidak perlu).</p>
       </Field>
       <Field label="API Key">
-        <input className="input" value={v.apiKey ?? ""} onChange={(e) => set("apiKey", e.target.value)} placeholder="X-API-Key" />
+        <input className="input" value={v.apiKey ?? ""} onChange={(e) => set("apiKey", e.target.value)} placeholder="value SONTOLOYO_API_KEY dari /etc/sontoloyo-agent.env" />
       </Field>
 
       <Field label="Manual: Active users">

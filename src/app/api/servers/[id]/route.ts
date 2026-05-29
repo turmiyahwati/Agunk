@@ -5,6 +5,24 @@ import { requireAdmin } from "@/lib/guards";
 import { serializeServer } from "@/lib/serialize";
 import { safeErrorMessage } from "@/lib/api-error";
 
+/**
+ * Same forgiving apiUrl validator as the create route. Auto-prefixes
+ * `http://` for bare hosts and strips trailing slashes before strict
+ * Zod URL parsing. Eliminates the most common admin paste mistake.
+ */
+const apiUrl = z
+  .string()
+  .nullable()
+  .optional()
+  .transform((v) => {
+    if (v == null) return v;
+    const t = v.trim();
+    if (!t) return null;
+    const withScheme = /^https?:\/\//i.test(t) ? t : `http://${t}`;
+    return withScheme.replace(/\/+$/, "");
+  })
+  .pipe(z.string().url().nullable().optional());
+
 const updateSchema = z.object({
   name: z.string().min(1).optional(),
   domain: z.string().min(1).optional(),
@@ -12,7 +30,7 @@ const updateSchema = z.object({
   countryName: z.string().min(1).optional(),
   flag: z.string().url().nullable().optional(),
   provider: z.string().min(1).optional(),
-  apiUrl: z.string().url().nullable().optional(),
+  apiUrl,
   apiKey: z.string().nullable().optional(),
   enabled: z.boolean().optional(),
   refreshMs: z.number().int().min(1000).max(600000).optional(),
