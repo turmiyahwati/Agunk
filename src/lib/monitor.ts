@@ -7,6 +7,7 @@ export type AgentPayload = {
   cpu?: number;
   ram?: number;
   ping?: number;
+  /** Mbps. Float (1 decimal) — values <1 Mbps are valid (e.g. 0.4). */
   speed?: number;
   rx?: number;
   tx?: number;
@@ -183,4 +184,85 @@ export async function testConnection(baseUrl: string, apiKey?: string | null) {
   } catch (e: any) {
     return { ok: false, error: e?.message || "fetch failed" };
   }
+}
+
+// ─── Lazy auto-sync (in-process scheduler) ──────────────────────────────
+//
+// Public read endpoints (`/api/servers/public`, `/api/stats`) call
+// `maybeAutoSync()` at the start of every request. When server data is
+// stale (no sync in the last MONITOR_AUTOSYNC_STALE_MS) and no other
+// sync is already in flight, we kick off `syncAll()` in the background
+// and return the response immediately. The next poll a few seconds
+// later sees the freshly written DB rows.
+//
+// This makes the dashboard self-healing: even with zero external cron,
+// any visitor traffic naturally drives data freshness. The previous
+// design required an external curl-based crontab which operators
+// frequently forgot to install (the original RCA case study saw a
+// dashboard frozen for hours because no scheduler was configured).
+//
+// Safeguards:
+//  • At most one inflight sync at a time (singleton promise)
+//  • Cooldown between successive auto-syncs (default 30 s) to avoid
+//    thundering-herd when many tabs poll concurrently
+//  • Skips entirely when no enabled server is stale — a fully fresh
+//    dashboard pays zero cost
+//  • Does NOT replace the documented cron in DEPLOY.md — the cron is
+//    still recommended as a safety net for low-traffic deployments.
+
+const AUTOSYNC_COOLDOWN_MS = Number(process.env.MONITOR_AUTOSYNC_COOLDOWN_MS || 30_000);
+const AUTOSYNC_STALE_MS = Number(process.env.MONITOR_AUTOSYNC_STALE_MS || 60_000);
+const AUTOSYNC_DISABLED = process.env.MONITOR_AUTOSYNC_DISABLED === "1";
+
+let lastAutoSyncAt = 0;
+let inflightAutoSync: Promise<unknown> | null = null;
+
+/**
+ * Trigger a background sync if any enabled server is stale.
+ *
+ * Fire-and-forget: callers must NOT await the returned promise. The
+ * function returns void; any thrown errors are swallowed (logged to
+ * stderr) so a sync failure cannot break a normal page render.
+ *
+ * Idempotent and concurrency-safe — many concurrent visitors all
+ * landing on `/api/servers/public` at once will trigger at most one
+ * background sync.
+ */
+export function maybeAutoSync(): void {
+  if (AUTOSYNC_DISABLED) return;
+  if (inflightAutoSync) return;
+  const now = Date.now();
+  if (now - lastAutoSyncAt < AUTOSYNC_COOLDOWN_MS) return;
+
+  // Mark the attempt window now (before the async work) so concurrent
+  // calls within the cooldown all bail out early.
+  lastAutoSyncAt = now;
+
+  const job = (async () => {
+    try {
+      // Skip the sync entirely when nothing is stale — protects against
+      // a noisy "first paint" page that fires many requests in parallel
+      // when the dashboard is already up to date.
+      const staleCutoff = new Date(now - AUTOSYNC_STALE_MS);
+      const stale = await prisma.server.findFirst({
+        where: {
+          enabled: true,
+          OR: [
+            { lastSyncAt: null },
+            { lastSyncAt: { lt: staleCutoff } },
+          ],
+        },
+        select: { id: true },
+      });
+      if (!stale) return;
+      await syncAll();
+    } catch (err) {
+      // Best-effort. Log to stderr but do not propagate.
+      console.error("[autosync] background sync failed:", err);
+    } finally {
+      inflightAutoSync = null;
+    }
+  })();
+
+  inflightAutoSync = job;
 }

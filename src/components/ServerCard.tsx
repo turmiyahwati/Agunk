@@ -6,7 +6,7 @@ import { motion } from "framer-motion";
 import { Activity, Gauge, Users, Wifi, ArrowRight } from "lucide-react";
 import { StatusBadge } from "./ui/StatusBadge";
 import { ProgressBar } from "./ui/ProgressBar";
-import { flagUrl, slotPercent, formatBytes, formatUptime } from "@/lib/utils";
+import { flagUrl, slotPercent, formatBytes, formatUptime, formatSpeed } from "@/lib/utils";
 
 export type ServerSummary = {
   id: string;
@@ -57,7 +57,7 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
 
       <div className="mt-4 grid grid-cols-3 gap-3 text-xs">
         <Stat icon={<Wifi size={14} />}     label="Ping"   value={server.pingMs ? `${server.pingMs} ms` : "—"} />
-        <Stat icon={<Activity size={14} />} label="Speed"  value={server.speedMbps ? `${server.speedMbps} Mb` : "—"} />
+        <Stat icon={<Activity size={14} />} label="Speed"  value={formatSpeed(server.speedMbps)} />
         <Stat icon={<Gauge size={14} />}    label="Uptime" value={formatUptime(server.uptimeSec)} />
       </div>
 

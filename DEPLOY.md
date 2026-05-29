@@ -391,6 +391,15 @@ cd /tmp/sontoloyo/vps-agent
 bash install.sh
 ```
 
+> **Update agent existing (sudah pernah install):** `install.sh` idempotent —
+> aman dijalankan ulang. Akan replace `sontoloyo_agent.py`, recreate venv
+> (kalau perlu), dan `systemctl restart sontoloyo-agent`. API key existing
+> di `/etc/sontoloyo-agent.env` **tidak diganti** kecuali kamu set
+> `SONTOLOYO_API_KEY=...` baru di env. Selalu pull repo terbaru dulu
+> (`git pull` di `/tmp/sontoloyo`) sebelum re-run `install.sh` agar dapat
+> fix terbaru (mis. perhitungan Xray account dari `config.json`, vnstat
+> monthly, dst).
+
 Output akhir akan tampilkan:
 ```
 ==========================================================
@@ -539,7 +548,20 @@ Buka `https://monitoring.pakde-premium.xyz/admin/servers` → login admin.
 
 ## 9. Cron auto-sync + auto-backup
 
-### 9.1. Cron sync (setiap menit)
+> **Heads up — sejak v1.1, dashboard punya self-healing auto-sync built-in.**
+> Endpoint publik (`/api/servers/public`, `/api/stats`) yang dipanggil tiap
+> kali halaman dibuka akan otomatis trigger `syncAll()` di background ketika
+> data lebih lama dari 60 detik. Throttled (max 1 sync setiap 30 detik) dan
+> tidak menghambat respon. Bisa di-disable lewat `MONITOR_AUTOSYNC_DISABLED=1`
+> di `.env`, atau di-tune lewat `MONITOR_AUTOSYNC_STALE_MS` /
+> `MONITOR_AUTOSYNC_COOLDOWN_MS`.
+>
+> **External cron tetap direkomendasikan** sebagai safety net — auto-sync
+> hanya jalan saat ada visitor yang ngebuka halaman, jadi pada hari yang
+> sangat sepi traffic, data bisa stale. Kalau dashboard kamu ramai dipake
+> setiap menit, cron eksternal opsional.
+
+### 9.1. Cron sync (setiap menit) — recommended safety net
 
 ```bash
 # Di VPS dashboard
@@ -683,7 +705,10 @@ sqlite3 prisma/prod.db "PRAGMA integrity_check;"  # ok
 | Server OFFLINE: `lastError: HTTP 404` | apiUrl ada `/api/status` di akhir, harus base saja | Edit di Admin UI: `https://agent-X.domain.com` (no path) |
 | Server OFFLINE: `lastError: Connection refused` | Agent tidak jalan di VPS target | `systemctl status sontoloyo-agent`; restart |
 | Login gagal "JWT decryption failed" | `NEXTAUTH_SECRET` baru diganti tapi cookie lama | `pm2 reload sontoloyo`; clear cookie browser |
-| `total_ssh`/`total_xray` selalu 0 | Path DB Premium installer berbeda | Cek `ls /etc/ssh/.ssh.db /etc/xray/.userall.db` di target |
+| `total_ssh`/`total_xray` selalu 0 | Path DB Premium installer berbeda | SSH: cek `ls /etc/ssh/.ssh.db`. Xray sekarang dihitung dari `/usr/local/etc/xray/config.json` atau `/etc/xray/config.json` (count `"email"`). Kalau Xray service mati, agent return 0 (sesuai panel). |
+| Active User dashboard ≠ panel installer | Agent versi lama (pre-v1.1) menghitung `/etc/xray/.userall.db` sebagai akun aktif | Update agent: `cd /tmp/sontoloyo && git pull && cd vps-agent && bash install.sh`. v1.1+ skip file log itu dan baca `config.json` langsung. |
+| Speed selalu kosong/"—" walau VPN aktif | Agent versi lama (pre-v1.1) truncate Mbps ke int | Update agent (sama seperti baris di atas). v1.1+ kirim float (mis. `0.4 Mb`). |
+| Chart user aktif tidak bergerak | Tidak ada cron + visitor traffic sangat sedikit | Setup cron Section 9.1 sebagai safety net, ATAU buka dashboard 1× setiap menit (auto-sync built-in akan jalan). |
 | Cron 401 | `MONITOR_SYNC_TOKEN` di .env ≠ header `X-Sync-Token` di crontab | Sinkronkan; `pm2 reload sontoloyo` setelah ubah .env |
 | Tunnel tidak konek dari Cloudflare | DNS belum propagasi atau config.yml typo | `cloudflared tunnel info <name>`; `nslookup agent-X.domain.com` |
 | `cloudflared: command not found` | Step 7.1 belum selesai | Re-run install command di 7.1 |

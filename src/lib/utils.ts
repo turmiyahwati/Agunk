@@ -34,6 +34,24 @@ export function slotPercent(active: number, max: number): number {
   return Math.min(100, Math.round((active / max) * 100));
 }
 
+/**
+ * Render a Mbps reading with sensible precision.
+ *
+ *   0           → "—"     (no traffic detected — render as a dash, not "0 Mb")
+ *   0 < n < 10  → "X.Y Mb" (1 decimal — keeps sub-Mbps VPN traffic visible)
+ *   n >= 10     → "N Mb"   (integer — large pipes don't need decimals)
+ *
+ * Pairs with the agent's float-typed `speed` field. The previous int
+ * rendering ("X Mb" with a falsy-zero check) hid every traffic level
+ * below 1 Mbps as "—", which made operators believe the dashboard was
+ * broken when in fact a VPN with 0.4 Mbps avg traffic was working fine.
+ */
+export function formatSpeed(mbps: number | null | undefined, suffix = "Mb"): string {
+  if (mbps == null || !isFinite(mbps) || mbps <= 0) return "—";
+  if (mbps < 10) return `${mbps.toFixed(1)} ${suffix}`;
+  return `${Math.round(mbps)} ${suffix}`;
+}
+
 export function deriveStatus(opts: {
   online: boolean;
   active: number;

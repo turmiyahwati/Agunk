@@ -9,7 +9,7 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PublicHeader } from "@/components/PublicHeader";
-import { flagUrl, formatBytes, formatUptime, slotPercent, shouldPoll } from "@/lib/utils";
+import { flagUrl, formatBytes, formatUptime, formatSpeed, slotPercent, shouldPoll } from "@/lib/utils";
 import type { ServerSummary } from "@/components/ServerCard";
 
 const REFRESH_MS = Number(process.env.NEXT_PUBLIC_REFRESH_MS || 10000);
@@ -124,7 +124,7 @@ export default function PublicServerDetail() {
           <Tile icon={Cpu}         label="CPU"   value={`${server.cpuPercent.toFixed(0)}%`} bar={server.cpuPercent} />
           <Tile icon={MemoryStick} label="RAM"   value={`${server.ramPercent.toFixed(0)}%`} bar={server.ramPercent} />
           <Tile icon={Wifi}        label="Ping"  value={server.pingMs ? `${server.pingMs} ms` : "—"} />
-          <Tile icon={Activity}    label="Speed" value={server.speedMbps ? `${server.speedMbps} Mb/s` : "—"} />
+          <Tile icon={Activity}    label="Speed" value={formatSpeed(server.speedMbps, "Mb/s")} />
         </div>
 
         <div className="grid gap-3 sm:gap-4 md:grid-cols-3">

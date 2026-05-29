@@ -22,17 +22,31 @@ JSON shape returned by /api/status:
   "cpu": 24.1,                // percent
   "ram": 41.2,                // percent
   "ping": 14,                 // ms — gateway → cloudflare → google fallback chain
-  "speed": 12,                // Mbps — live RX+TX throughput delta (not NIC link rate)
-  "rx": 12345678,             // bytes
-  "tx": 87654321,             // bytes
-  "active_users": 29,         // active subscribers (registered, NOT expired)
-  "online_now": 3,            // live online sessions right now
+  "speed": 0.6,               // Mbps (FLOAT, 1 decimal) — live RX+TX throughput
+  "rx": 12345678,             // bytes — current month total on default-route iface
+  "tx": 87654321,             // bytes — current month total on default-route iface
+  "active_users": 27,         // active subscribers (registered, NOT expired)
   "ssh": true, "xray": true, "nginx": true, "udp": false,
-  "total_ssh": 120, "total_xray": 80
+  "total_ssh": 38, "total_xray": 0
 }
+
+Counting policy (matches what the Premium auto-installer's main menu shows):
+
+* SSH active   = lines in /etc/ssh/.ssh.db whose embedded expiry date is
+                 today-or-later. Lines without a parseable date are
+                 IGNORED — those are stale/legacy entries that the
+                 installer's own panel does not count either.
+* Xray active  = number of "email" entries in the live Xray config.json
+                 (the source of truth Xray itself reads). Returns 0 when
+                 the xray service is inactive, mirroring panel behavior.
+                 The legacy /etc/xray/.userall.db file is NOT consulted —
+                 in real deployments it accumulates dateless entries for
+                 every account that was ever created, including the ones
+                 already deleted from the panel.
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 import json
@@ -77,7 +91,7 @@ def _cached(key: str, ttl: float, producer: Callable[[], T]) -> T:
     return value
 
 
-app = FastAPI(title="Sontoloyo VPS Agent", version="1.0.0")
+app = FastAPI(title="Sontoloyo VPS Agent", version="1.1.0")
 
 # Prime the per-process CPU sampler so the first request that lands on
 # `psutil.cpu_percent(interval=None)` gets a real value instead of 0.0.
@@ -185,15 +199,18 @@ _last_net_sample: dict[str, float] = {"rx": 0.0, "tx": 0.0, "ts": 0.0}
 _last_net_lock = threading.Lock()
 
 
-def _throughput_mbps() -> int:
-    """Live network throughput in Mbps (RX + TX combined).
+def _throughput_mbps() -> float:
+    """Live network throughput in Mbps (RX + TX combined), as a 1-decimal float.
 
     Uses the byte counters from psutil and returns the delta-per-second
     as Mbps. The first call has no baseline so it returns 0; subsequent
     calls (every cache TTL ≈ 3 s) report the average throughput observed
-    over the interval. This replaces the old NIC-link-speed reading,
-    which never changed and gave operators a false impression that the
-    dashboard was static.
+    over the interval.
+
+    Returns float (e.g. 0.4 Mbps) instead of int — the previous int()
+    truncation made every traffic level below 1 Mbps display as 0 on
+    the dashboard, even when there was clearly real traffic moving
+    (vnstat would show 1.6 Mbit/s avg while the dashboard showed empty).
     """
     n = psutil.net_io_counters()
     now = time.time()
@@ -208,13 +225,16 @@ def _throughput_mbps() -> int:
 
     if prev_ts == 0:
         # First sample of the process lifetime — no delta to report yet.
-        return 0
+        return 0.0
     dt = now - prev_ts
     if dt < 0.5:
-        return 0
+        return 0.0
     delta_bytes = max(0.0, (rx - prev_rx) + (tx - prev_tx))
     bits_per_sec = delta_bytes * 8.0 / dt
-    return int(bits_per_sec / 1_000_000)
+    mbps = bits_per_sec / 1_000_000
+    # Round to 1 decimal — matches the "X.Y Mbit/s" granularity vnstat
+    # uses in its monthly reports, plenty of precision for a UI gauge.
+    return round(mbps, 1)
 
 
 def _net_rx_tx() -> tuple[int, int]:
@@ -222,27 +242,75 @@ def _net_rx_tx() -> tuple[int, int]:
     return int(n.bytes_recv), int(n.bytes_sent)
 
 
-def _vnstat_total() -> tuple[int, int]:
-    """Return cumulative (rx_bytes, tx_bytes) from `vnstat --json`.
+def _default_route_iface() -> Optional[str]:
+    """Return the kernel's chosen default-route interface name, e.g. ``eth0``.
 
-    vnstat aggregates traffic across reboots in its on-disk database, so
-    the returned value reflects long-term usage (the same number you see
-    in the Premium auto-installer banner). Falls back to the per-process
-    psutil counter when vnstat is not installed or its DB is empty.
+    Used to pick the right entry from ``vnstat --json`` instead of
+    blindly trusting ``interfaces[0]`` — which on multi-NIC hosts (eth0
+    + tun0/wg0 + tun1) can land on a tunnel and report tunnel-only
+    traffic, dramatically under- or over-counting the real public link.
     """
+    try:
+        out = subprocess.check_output(
+            "ip route | awk '/default/ {print $5; exit}'",
+            shell=True, text=True, timeout=2,
+        ).strip()
+        return out or None
+    except Exception:
+        return None
+
+
+def _vnstat_total() -> tuple[int, int]:
+    """Return (rx_bytes, tx_bytes) for the current calendar month.
+
+    Picks the interface that backs the kernel's default route, falling
+    back to the first vnstat-tracked interface when that lookup fails.
+    Reads ``traffic.month[<latest>]`` so the figure aligns with what
+    operators see when they run ``vnstat -m`` on the box. The Premium
+    auto-installer's banner uses the same monthly-window convention,
+    so the dashboard now agrees with the panel.
+
+    Falls back to lifetime ``traffic.total`` when no monthly window is
+    present (e.g. fresh vnstat install with <1 day of history), then to
+    psutil's per-process counter as a last resort (since-boot only).
+    """
+    iface_pref = _default_route_iface()
     try:
         out = subprocess.check_output(
             ["vnstat", "--json"], text=True, timeout=3,
         )
         data = json.loads(out)
-        iface = data.get("interfaces", [{}])[0]
-        total = iface.get("traffic", {}).get("total", {})
+        ifaces = data.get("interfaces") or []
+        if not ifaces:
+            return _net_rx_tx()
+
+        # Pick the iface matching default route; fall back to first.
+        iface = next(
+            (i for i in ifaces if i.get("name") == iface_pref),
+            ifaces[0],
+        )
+        traffic = iface.get("traffic", {}) or {}
+
+        # Prefer the most recent month bucket. vnstat returns months
+        # ordered chronologically; the last entry is the current one.
+        months = traffic.get("month") or []
+        if months:
+            latest = months[-1]
+            rx = int(latest.get("rx", 0))
+            tx = int(latest.get("tx", 0))
+            if rx > 0 or tx > 0:
+                return rx, tx
+
+        # Fallback 1: lifetime total when no monthly bucket.
+        total = traffic.get("total") or {}
         rx = int(total.get("rx", 0))
         tx = int(total.get("tx", 0))
         if rx > 0 or tx > 0:
             return rx, tx
     except Exception:
         pass
+
+    # Fallback 2: psutil since-boot. Better than reporting zero.
     return _net_rx_tx()
 
 
@@ -261,13 +329,9 @@ def _ssh_online() -> int:
 # ─────────────────── expiry-aware account counters ────────────────────────
 # Lines from /etc/ssh/.ssh.db look like (Premium auto-installer convention):
 #   #ssh# KukkVIP   PfremID 0 2 13 May, 2026
-#   #ssh# trial     whus
-# Lines from /etc/xray/.userall.db follow the same shape but often omit
-# the trailing date when the account is set as lifetime / non-expiring.
-#
-# To match the "ACCOUNT" number shown in the Premium auto-installer's
-# main menu, we count lines whose embedded expiry date is today-or-later,
-# and treat lines without any parseable date as still-active (lifetime).
+# Every active SSH subscriber gets a parseable expiry date. Lines without
+# a date are STALE/LEGACY entries the installer's own menu also ignores —
+# we treat them the same way (skip).
 
 _MONTHS = {
     "jan": 1,  "feb": 2,  "mar": 3,  "apr": 4,  "may": 5,  "jun": 6,
@@ -285,11 +349,7 @@ _EXPIRY_RE = re.compile(
 
 
 def _parse_expiry(line: str) -> Optional[datetime]:
-    """Return the expiry ``datetime`` embedded in ``line``, or None.
-
-    None means "no parseable date" — caller decides whether to treat the
-    line as a lifetime account (count it) or skip it. We count it.
-    """
+    """Return the expiry ``datetime`` embedded in ``line``, or None."""
     m = _EXPIRY_RE.search(line)
     if not m:
         return None
@@ -303,13 +363,15 @@ def _parse_expiry(line: str) -> Optional[datetime]:
         return None
 
 
-def _count_active_in_db(path: str) -> int:
-    """Count #ssh#-prefixed lines in ``path`` that are not yet expired.
+def _count_active_ssh_in_db(path: str) -> int:
+    """Count #ssh#-prefixed lines in ``path`` whose expiry is today-or-later.
 
-    A line is considered active when:
-      * it starts with ``#ssh#`` (the Premium installer's marker), AND
-      * either contains no parseable date (lifetime) OR its date is
-        today-or-later in the agent's local timezone.
+    Lines without a parseable expiry date are SKIPPED (not counted). In
+    real Premium-installer deployments these are stale/legacy markers
+    that the installer's own menu also ignores — counting them as
+    "lifetime accounts" was the original cause of the dashboard's
+    inflated Active User numbers (see RCA: 41 dateless Xray entries
+    being counted as active even though the panel reported 0).
     """
     if not os.path.isfile(path):
         return 0
@@ -321,7 +383,9 @@ def _count_active_in_db(path: str) -> int:
                 if not line.strip().startswith("#ssh#"):
                     continue
                 expiry = _parse_expiry(line)
-                if expiry is None or expiry >= today:
+                if expiry is None:
+                    continue  # skip legacy/stale entries
+                if expiry >= today:
                     n += 1
     except Exception:
         return 0
@@ -379,8 +443,60 @@ def _xray_online() -> int:
     )
 
 
+def _xray_config_paths() -> list[str]:
+    """Standard Xray config locations, in lookup order."""
+    return ["/usr/local/etc/xray/config.json", "/etc/xray/config.json"]
+
+
+def _count_xray_emails_in_config() -> int:
+    """Number of ``"email"`` entries in the live Xray config.json.
+
+    This is the source of truth Xray itself uses at runtime. Matches the
+    "Xray Account" number shown in the Premium auto-installer panel.
+
+    We parse the file as text (regex on `"email"` keys) instead of JSON
+    because real-world Xray configs frequently contain comments (`//`)
+    that ``json.loads`` chokes on. The regex approach is robust against
+    that and against minor formatting variations.
+    """
+    seen: set[str] = set()
+    for cfg in _xray_config_paths():
+        if not os.path.isfile(cfg):
+            continue
+        try:
+            with open(cfg) as fp:
+                content = fp.read()
+        except Exception:
+            continue
+        # Capture the email value so duplicates across protocols (a single
+        # account often appears under VMESS, VLESS, and TROJAN inbounds)
+        # are counted once — same convention as the panel.
+        for m in re.finditer(r'"email"\s*:\s*"([^"]+)"', content):
+            seen.add(m.group(1))
+    return len(seen)
+
+
+def _active_xray_accounts() -> int:
+    """Active Xray accounts that match the panel's "Xray Account" number.
+
+    Returns 0 when the xray service is inactive (the panel hides the
+    count under that condition too, so the dashboard now mirrors it).
+    Otherwise returns the unique-email count from the live config.json.
+
+    Importantly, ``/etc/xray/.userall.db`` is NOT consulted: that file
+    is a historical log of every account ever created (including the
+    ones already deleted from the panel) and using it as the ground
+    truth was the root cause of the dashboard's inflated Active User
+    metric (the case study had 0 accounts in the panel but 41 dateless
+    entries in .userall.db being counted as "lifetime active").
+    """
+    if not _service_active("xray"):
+        return 0
+    return _count_xray_emails_in_config()
+
+
 def _total_ssh_accounts() -> int:
-    """Count total SSH accounts.
+    """Count total SSH accounts (active + expired).
 
     Lookup order (first hit wins):
       1. `/etc/ssh/.ssh.db` — Indonesian Premium auto-installer convention
@@ -426,48 +542,13 @@ def _total_ssh_accounts() -> int:
 
 
 def _total_xray_accounts() -> int:
-    """Count total Xray (vmess/vless/trojan) accounts.
+    """Count total Xray accounts (the panel's "Xray Account" total).
 
-    Lookup order (first hit wins):
-      1. `/etc/xray/.userall.db` — Indonesian Premium auto-installer DB.
-         Lines start with ``#ssh#`` (yes, the script reuses the prefix).
-      2. `/etc/sontoloyo/xray.users` — operator-managed plain list.
-      3. `/usr/local/etc/xray/config.json` — vanilla Xray config: count
-         the `"email"` fields.
-      4. `/etc/xray/config.json` — alternate path used by some installers.
+    Mirrors :func:`_active_xray_accounts` for consistency: the live
+    config.json is the authoritative source. The legacy
+    ``/etc/xray/.userall.db`` is intentionally NOT consulted.
     """
-    # 1) Premium auto-installer DB
-    f = "/etc/xray/.userall.db"
-    if os.path.isfile(f):
-        try:
-            with open(f) as fp:
-                n = sum(1 for ln in fp if ln.strip().startswith("#ssh#"))
-            if n > 0:
-                return n
-        except Exception:
-            pass
-
-    # 2) Sontoloyo-managed list
-    f = "/etc/sontoloyo/xray.users"
-    if os.path.isfile(f):
-        try:
-            with open(f) as fp:
-                return sum(1 for ln in fp if ln.strip() and not ln.startswith("#"))
-        except Exception:
-            pass
-
-    # 3) Vanilla Xray config — count "email" entries
-    for cfg in ("/usr/local/etc/xray/config.json", "/etc/xray/config.json"):
-        if os.path.isfile(cfg):
-            try:
-                with open(cfg) as fp:
-                    n = len(re.findall(r'"email"\s*:\s*"', fp.read()))
-                if n > 0:
-                    return n
-            except Exception:
-                continue
-
-    return 0
+    return _count_xray_emails_in_config()
 
 
 # ─────────────────────────── routes ───────────────────────────────────────
@@ -491,15 +572,13 @@ def _build_status_payload() -> dict:
 
     ``active_users`` is the count of *active subscribers* — registered
     accounts that are not yet expired — so it matches the "ACCOUNT"
-    number shown in the Premium auto-installer's main menu. The live
-    online-session count (the old meaning) is still exposed as
-    ``online_now`` for callers that want it.
+    number shown in the Premium auto-installer's main menu.
     """
     rx, tx = _vnstat_total()
+    active_ssh = _count_active_ssh_in_db("/etc/ssh/.ssh.db")
+    active_xray = _active_xray_accounts()
     online_ssh = _ssh_online()
     online_xray = _xray_online()
-    active_ssh = _count_active_in_db("/etc/ssh/.ssh.db")
-    active_xray = _count_active_in_db("/etc/xray/.userall.db")
     # Non-blocking CPU read — uses the delta since the previous snapshot
     # (which the cache keeps refreshed every few seconds), so we avoid
     # the 200 ms blocking sample on the request hot path.
@@ -510,16 +589,15 @@ def _build_status_payload() -> dict:
         "cpu": cpu,
         "ram": psutil.virtual_memory().percent,
         "ping": _gateway_ping_ms(),
-        # Live throughput (Mbps) over the last cache window; matches what
-        # the Premium auto-installer banner shows. Replaces the old NIC
-        # link-speed value that made the dashboard look frozen.
+        # Live throughput (Mbps, 1 decimal) over the last cache window.
+        # Float-typed so traffic <1 Mbps shows up correctly on the
+        # dashboard instead of truncating to 0.
         "speed": _throughput_mbps(),
         "rx": rx, "tx": tx,
-        # Slot count shown on the dashboard: active subscribers (matches
-        # the Premium menu's ACCOUNT number). Falls back to the live
-        # online count when the Premium DB files aren't present.
+        # Active subscribers (matches the Premium menu's ACCOUNT number).
+        # Fallback to the live online count when neither DB nor config
+        # has a parseable entry — better than a flat zero.
         "active_users": (active_ssh + active_xray) or (online_ssh + online_xray),
-        "online_now": online_ssh + online_xray,
         "ssh":   _service_active("ssh") or _service_active("sshd"),
         "xray":  _service_active("xray"),
         "nginx": _service_active("nginx"),
