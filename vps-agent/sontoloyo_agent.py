@@ -108,27 +108,49 @@ def _udp_active() -> bool:
     return False
 
 
+def _tcp_ping_ms(host: str, port: int, timeout: float = 1.5) -> Optional[int]:
+    """Measure TCP handshake time as a fallback when ICMP is blocked.
+
+    Many cheap VPS providers silently drop ALL outbound ICMP — both to
+    on-net gateways and to public resolvers like 1.1.1.1/8.8.8.8. In
+    that case a TCP connect to a well-known service (typically 443) is
+    the only practical way to obtain a latency number, since TCP/443 is
+    almost universally permitted.
+    """
+    try:
+        start = time.monotonic()
+        with socket.create_connection((host, port), timeout=timeout):
+            return int((time.monotonic() - start) * 1000)
+    except Exception:
+        return None
+
+
 def _gateway_ping_ms() -> int:
     """Latency in ms to the first reachable upstream target.
 
-    Tries default gateway first (fastest, on-net), then well-known public
-    resolvers as fallback. Many VPS providers silently drop ICMP to the
-    gateway address while still allowing it to public IPs, so a single-
-    target ping was reporting 0 in the field.
+    Strategy (first non-zero wins):
+
+      1. ICMP to the default gateway — fastest when on-net.
+      2. ICMP to public resolvers (1.1.1.1, 8.8.8.8).
+      3. TCP-handshake to Cloudflare/Google over 443 / 53 — needed for
+         providers that drop all outbound ICMP. Slightly higher than
+         pure ICMP because it includes the SYN-ACK round-trip + setup,
+         but still in the same order of magnitude and stable.
     """
-    targets: list[str] = []
+    # ICMP attempts: gateway first, then well-known public targets.
+    icmp_targets: list[str] = []
     try:
         gw = subprocess.check_output(
             "ip route | awk '/default/ {print $3; exit}'",
             shell=True, text=True, timeout=2,
         ).strip()
         if gw:
-            targets.append(gw)
+            icmp_targets.append(gw)
     except Exception:
         pass
-    targets.extend(["1.1.1.1", "8.8.8.8"])
+    icmp_targets.extend(["1.1.1.1", "8.8.8.8"])
 
-    for target in targets:
+    for target in icmp_targets:
         try:
             out = subprocess.check_output(
                 ["ping", "-c", "1", "-W", "1", target], text=True, timeout=3,
@@ -138,6 +160,12 @@ def _gateway_ping_ms() -> int:
                 return int(float(m.group(1)))
         except Exception:
             continue
+
+    # TCP fallback — when the provider firewall drops ICMP entirely.
+    for host, port in (("1.1.1.1", 443), ("8.8.8.8", 443), ("1.1.1.1", 53)):
+        v = _tcp_ping_ms(host, port)
+        if v is not None and v > 0:
+            return v
     return 0
 
 
