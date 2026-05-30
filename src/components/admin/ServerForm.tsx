@@ -10,12 +10,17 @@ export type ServerFormValues = {
   provider: string;
   apiUrl?: string | null;
   apiKey?: string | null;
+  /**
+   * Public-facing hostname used by the browser-side LivePing / LiveSpeed
+   * components on the public homepage. This is exposed to visitors so it
+   * MUST NOT be the real VPS IP — set it to the Cloudflare Tunnel
+   * subdomain (e.g. `agent-id1.example.com`). Leave blank to fall back to
+   * the server-side ping/speed numbers reported by the agent.
+   */
+  pingHost?: string | null;
   enabled: boolean;
   refreshMs: number;
   maxSlot: number;
-  activeUsers?: number;
-  pingMs?: number;
-  speedMbps?: number;
 };
 
 const empty: ServerFormValues = {
@@ -27,12 +32,10 @@ const empty: ServerFormValues = {
   provider: "",
   apiUrl: "",
   apiKey: "",
+  pingHost: "",
   enabled: true,
   refreshMs: 10000,
   maxSlot: 100,
-  activeUsers: 0,
-  pingMs: 0,
-  speedMbps: 0,
 };
 
 export function ServerForm({
@@ -60,6 +63,7 @@ export function ServerForm({
       flag: v.flag ? v.flag : null,
       apiUrl: v.apiUrl ? v.apiUrl : null,
       apiKey: v.apiKey ? v.apiKey : null,
+      pingHost: v.pingHost ? v.pingHost : null,
     };
     try { await onSubmit(cleaned); } finally { setBusy(false); }
   }
@@ -74,6 +78,7 @@ export function ServerForm({
       </Field>
       <Field label="Domain / IP" required>
         <input className="input" required value={v.domain} onChange={(e) => set("domain", e.target.value)} placeholder="sg1.example.com" />
+        <p className="mt-1 text-[11px] text-slate-500">Disimpan privat — admin saja. Tidak ditampilkan ke visitor publik.</p>
       </Field>
       <Field label="Max Slot" required>
         <input className="input" type="number" min={1} required value={v.maxSlot} onChange={(e) => set("maxSlot", Number(e.target.value))} />
@@ -101,14 +106,13 @@ export function ServerForm({
         <input className="input" value={v.apiKey ?? ""} onChange={(e) => set("apiKey", e.target.value)} placeholder="value SONTOLOYO_API_KEY dari /etc/sontoloyo-agent.env" />
       </Field>
 
-      <Field label="Manual: Active users">
-        <input className="input" type="number" min={0} value={v.activeUsers ?? 0} onChange={(e) => set("activeUsers", Number(e.target.value))} />
-      </Field>
-      <Field label="Manual: Ping (ms)">
-        <input className="input" type="number" min={0} value={v.pingMs ?? 0} onChange={(e) => set("pingMs", Number(e.target.value))} />
-      </Field>
-      <Field label="Manual: Speed (Mb/s)">
-        <input className="input" type="number" min={0} value={v.speedMbps ?? 0} onChange={(e) => set("speedMbps", Number(e.target.value))} />
+      <Field label="Public Ping Host (opsional)">
+        <input className="input" value={v.pingHost ?? ""} onChange={(e) => set("pingHost", e.target.value)} placeholder="agent-id1.example.com" />
+        <p className="mt-1 text-[11px] text-slate-500">
+          Hostname yang dipakai browser visitor untuk live ping & speedtest. Pakai
+          <strong className="text-cyan-300"> Cloudflare Tunnel hostname</strong>, jangan IP asli VPS.
+          Kosongkan untuk pakai fallback angka server-side dari agent.
+        </p>
       </Field>
 
       <Field label="Auto monitor">

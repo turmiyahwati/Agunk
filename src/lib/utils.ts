@@ -52,18 +52,6 @@ export function formatSpeed(mbps: number | null | undefined, suffix = "Mb"): str
   return `${Math.round(mbps)} ${suffix}`;
 }
 
-export function deriveStatus(opts: {
-  online: boolean;
-  active: number;
-  max: number;
-}): "ONLINE" | "OFFLINE" | "FULL" | "WARNING" {
-  if (!opts.online) return "OFFLINE";
-  const pct = slotPercent(opts.active, opts.max);
-  if (opts.max > 0 && opts.active >= opts.max) return "FULL";
-  if (pct >= 90) return "WARNING";
-  return "ONLINE";
-}
-
 /**
  * Indonesian relative-time formatter used by the activity log.
  *  < 5s  → "baru saja"

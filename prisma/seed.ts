@@ -2,9 +2,23 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
-// Defensive: if .env failed to load (Windows BOM, missing file, etc.) we
-// still want the seed to succeed in development. Production should always
-// have DATABASE_URL set explicitly.
+/**
+ * Production-grade seed: creates the admin user only.
+ *
+ * The previous version of this script also inserted four demo servers
+ * (SG-Premium-01, ID-Jakarta-01, JP-Tokyo-02, US-NewYork-01) and 16
+ * randomized activity-log entries. Both were removed because:
+ *
+ *  - Demo servers showed fake values (e.g. "speedMbps: 940") on the
+ *    public homepage of every fresh deployment, confusing operators
+ *    into thinking the dashboard had real data when it didn't.
+ *  - Demo activity rows generated synthetic "VLESS · JP-Tokyo-02 · 5
+ *    menit lalu" entries that misled visitors about real-time usage.
+ *
+ * Operators add real servers via the admin UI after the first deploy.
+ * Real activity rows are inserted by external API integrations (the
+ * VPN reseller backend posts to /api/activity when a customer buys).
+ */
 if (!process.env.DATABASE_URL) {
   process.env.DATABASE_URL = "file:./dev.db";
   // eslint-disable-next-line no-console
@@ -12,14 +26,6 @@ if (!process.env.DATABASE_URL) {
     "[seed] DATABASE_URL not set — falling back to file:./dev.db (dev only).",
   );
 }
-
-const ServerStatus = {
-  ONLINE: "ONLINE",
-  OFFLINE: "OFFLINE",
-  FULL: "FULL",
-  WARNING: "WARNING",
-  UNKNOWN: "UNKNOWN",
-} as const;
 
 const prisma = new PrismaClient();
 
@@ -35,122 +41,14 @@ async function main() {
     create: { email, password: hash, name, active: true },
   });
 
-  // Demo servers (skipped if any server already exists)
-  const existing = await prisma.server.count();
-  if (existing === 0) {
-    const demos = [
-      {
-        name: "SG-Premium-01",
-        domain: "sg1.example.com",
-        country: "SG",
-        countryName: "Singapore",
-        provider: "DigitalOcean",
-        maxSlot: 200,
-        activeUsers: 87,
-        pingMs: 14,
-        speedMbps: 940,
-        status: ServerStatus.ONLINE,
-        cpuPercent: 32,
-        ramPercent: 41,
-        sshActive: true,
-        xrayActive: true,
-        nginxActive: true,
-        udpActive: true,
-        totalSsh: 120,
-        totalXray: 80,
-        uptimeSec: 60 * 60 * 72,
-      },
-      {
-        name: "ID-Jakarta-01",
-        domain: "jkt1.example.com",
-        country: "ID",
-        countryName: "Indonesia",
-        provider: "BiznetGio",
-        maxSlot: 150,
-        activeUsers: 142,
-        pingMs: 8,
-        speedMbps: 800,
-        status: ServerStatus.WARNING,
-        cpuPercent: 71,
-        ramPercent: 65,
-        sshActive: true,
-        xrayActive: true,
-        nginxActive: true,
-        udpActive: false,
-        totalSsh: 180,
-        totalXray: 60,
-        uptimeSec: 60 * 60 * 220,
-      },
-      {
-        name: "JP-Tokyo-02",
-        domain: "tyo2.example.com",
-        country: "JP",
-        countryName: "Japan",
-        provider: "Vultr",
-        maxSlot: 120,
-        activeUsers: 0,
-        pingMs: 0,
-        speedMbps: 0,
-        status: ServerStatus.OFFLINE,
-      },
-      {
-        name: "US-NewYork-01",
-        domain: "nyc1.example.com",
-        country: "US",
-        countryName: "United States",
-        provider: "Linode",
-        maxSlot: 100,
-        activeUsers: 100,
-        pingMs: 220,
-        speedMbps: 500,
-        status: ServerStatus.FULL,
-        cpuPercent: 88,
-        ramPercent: 82,
-        sshActive: true,
-        xrayActive: true,
-        nginxActive: true,
-        udpActive: true,
-        totalSsh: 90,
-        totalXray: 110,
-        uptimeSec: 60 * 60 * 50,
-      },
-    ];
-    for (const d of demos) await prisma.server.create({ data: d as any });
-  }
-
-  // Demo activity log entries — only inserted when the table is empty.
-  // Runs after seed completes so admin can re-seed to refresh timestamps.
-  const existingActivity = await prisma.activity.count();
-  if (existingActivity === 0) {
-    const protocols = ["SSH", "VMESS", "VLESS", "TROJAN"] as const;
-    const serverNames = [
-      "SG-Premium-01",
-      "ID-Jakarta-01",
-      "JP-Tokyo-02",
-      "US-NewYork-01",
-    ];
-    // 16 entries spread across the last hour so the homepage has a
-    // believable "live" feel right after first run.
-    const offsets = [
-      5, 30, 75, 120, 200, 330, 480, 600, 760, 920,
-      1100, 1320, 1600, 1900, 2300, 2800,
-    ];
-    for (const offsetSec of offsets) {
-      const protocol = protocols[Math.floor(Math.random() * protocols.length)];
-      const serverName = serverNames[Math.floor(Math.random() * serverNames.length)];
-      await prisma.activity.create({
-        data: {
-          protocol,
-          serverName,
-          action: "CREATE",
-          createdAt: new Date(Date.now() - offsetSec * 1000),
-        },
-      });
-    }
-  }
-
   console.log("Seed complete.");
   console.log("Admin login:", email, "/", password);
+  console.log("");
+  console.log("Next steps:");
+  console.log("  1. Login at /login with the credentials above");
+  console.log("  2. Add your real VPS servers under /admin/servers");
+  console.log("  3. Configure each server's 'Public Ping Host' for");
+  console.log("     browser-side live ping & speedtest on the public page");
 }
 
 main()
