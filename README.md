@@ -160,13 +160,14 @@ curl http://127.0.0.1:8787/health
 curl -H "X-API-Key: <key>" http://127.0.0.1:8787/api/status
 ```
 
-JSON shape returned by `/api/status` (v1.2 contract):
+JSON shape returned by `/api/status` (v1.3 contract):
 
 ```json
 {
   "ok": true,
   "uptime": 12345, "cpu": 24.1, "ram": 41.2,
-  "ping": 14, "speed": 0.6,
+  "ping": 14,
+  "speed": 12.4, "rx_speed": 8.2, "tx_speed": 4.2,
   "rx": 12345678, "tx": 87654321,
   "active_users": 27,
   "ssh": true, "xray": true, "nginx": true, "udp": false,
@@ -174,16 +175,19 @@ JSON shape returned by `/api/status` (v1.2 contract):
 }
 ```
 
-`speed` is a **float** (1 decimal) — values <1 Mbps are valid.
+`rx_speed` and `tx_speed` are realtime network throughput (RX/TX byte
+delta per second). They reflect the traffic actually flowing through
+the VPS, NOT a periodic speedtest. Idle servers report ~0; busy
+servers report the current rate. The combined `speed` field is kept
+for backward compatibility.
+
 `rx`/`tx` reflect the current calendar month on the kernel default-route
 interface (matches `vnstat -m`). `active_users` counts active subscribers
 (SSH lines with future expiry + unique Xray emails in `config.json`).
 
-Public probe endpoints (no auth, CORS-enabled, rate-limited):
-
-- `GET /api/probe/download?bytes=N` — streams up to 10 MB for browser-side download speedtest
-- `POST /api/probe/upload` — accepts up to 10 MB for browser-side upload speedtest
-- `GET /health` — 100-byte JSON heartbeat for browser-side live ping
+Public endpoint (no auth, CORS-enabled): `GET /health` — small JSON
+heartbeat used by the dashboard's browser-side LivePing component for
+realtime latency measurement.
 
 The agent auto-restarts via systemd. Logs: `journalctl -u sontoloyo-agent -f`.
 

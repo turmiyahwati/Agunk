@@ -36,6 +36,8 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       activeUsers: m.activeUsers,
       pingMs: m.pingMs,
       speedMbps: m.speedMbps,
+      rxSpeedMbps: m.rxSpeedMbps,
+      txSpeedMbps: m.txSpeedMbps,
       rxBytes: Number(m.rxBytes),
       txBytes: Number(m.txBytes),
       cpuPercent: m.cpuPercent,

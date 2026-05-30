@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Cpu, MemoryStick, Wifi, Activity, Server, Globe } from "lucide-react";
+import { ArrowLeft, Cpu, MemoryStick, Wifi, Activity, Server, Globe, Download, Upload } from "lucide-react";
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip } from "recharts";
 
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -11,7 +11,6 @@ import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PublicHeader } from "@/components/PublicHeader";
 import { LivePing } from "@/components/LivePing";
-import { LiveSpeed } from "@/components/LiveSpeed";
 import { flagUrl, formatBytes, formatUptime, slotPercent, shouldPoll } from "@/lib/utils";
 import type { ServerSummary } from "@/components/ServerCard";
 
@@ -134,13 +133,32 @@ export default function PublicServerDetail() {
             <div className="text-2xl font-bold">
               <LivePing host={server.pingHost} fallback={server.pingMs} />
             </div>
+            <div className="mt-1 text-[10px] text-slate-500">via Cloudflare edge</div>
           </div>
           <div className="glass p-5">
             <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs uppercase tracking-wider text-slate-400">Speed (live)</span>
+              <span className="text-xs uppercase tracking-wider text-slate-400">Throughput (live)</span>
               <Activity size={16} className="text-cyan-300" />
             </div>
-            <LiveSpeed host={server.pingHost} fallbackMbps={server.speedMbps} />
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <div className="mb-0.5 inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-cyan-300/80">
+                  <Download size={11} /> Down
+                </div>
+                <div className="font-mono text-base text-slate-100">
+                  {(server.rxSpeedMbps ?? 0).toFixed(1)} Mbps
+                </div>
+              </div>
+              <div>
+                <div className="mb-0.5 inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-fuchsia-300/80">
+                  <Upload size={11} /> Up
+                </div>
+                <div className="font-mono text-base text-slate-100">
+                  {(server.txSpeedMbps ?? 0).toFixed(1)} Mbps
+                </div>
+              </div>
+            </div>
+            <div className="mt-1 text-[10px] text-slate-500">Realtime traffic dari VPS</div>
           </div>
         </div>
 

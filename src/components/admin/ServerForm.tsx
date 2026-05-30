@@ -11,11 +11,11 @@ export type ServerFormValues = {
   apiUrl?: string | null;
   apiKey?: string | null;
   /**
-   * Public-facing hostname used by the browser-side LivePing / LiveSpeed
-   * components on the public homepage. This is exposed to visitors so it
-   * MUST NOT be the real VPS IP — set it to the Cloudflare Tunnel
-   * subdomain (e.g. `agent-id1.example.com`). Leave blank to fall back to
-   * the server-side ping/speed numbers reported by the agent.
+   * Public-facing hostname used by the browser-side LivePing component
+   * on the public homepage. This is exposed to visitors so it MUST NOT
+   * be the real VPS IP — set it to the Cloudflare Tunnel subdomain
+   * (e.g. `agent-id1.example.com`). Leave blank to fall back to the
+   * server-side ping number reported by the agent.
    */
   pingHost?: string | null;
   enabled: boolean;

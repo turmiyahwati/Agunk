@@ -7,8 +7,16 @@ export type AgentPayload = {
   cpu?: number;
   ram?: number;
   ping?: number;
-  /** Mbps. Float (1 decimal) — values <1 Mbps are valid (e.g. 0.4). */
+  /**
+   * Combined RX+TX throughput in Mbps. Kept for backward compatibility
+   * with the v1.2 agent contract (some operators may not have upgraded
+   * yet). New consumers should prefer `rx_speed` / `tx_speed`.
+   */
   speed?: number;
+  /** Realtime download throughput (Mbps, 1 decimal). Agent v1.3+. */
+  rx_speed?: number;
+  /** Realtime upload throughput (Mbps, 1 decimal). Agent v1.3+. */
+  tx_speed?: number;
   rx?: number;
   tx?: number;
   active_users?: number;
@@ -125,11 +133,31 @@ export async function syncServer(serverId: string) {
   const active = payload?.active_users ?? s.activeUsers;
   const status = deriveStatus(active, s.maxSlot, online);
 
+  // Throughput resolution. v1.3+ agents send rx_speed / tx_speed split
+  // by direction; the legacy `speed` field (combined RX+TX) is retained
+  // for older agents that have not been upgraded yet. When only `speed`
+  // is available we cannot tell which way the traffic flowed, so we
+  // distribute it across the legacy speedMbps column only — leaving
+  // rxSpeedMbps / txSpeedMbps at the previous value (or 0 on first
+  // sync) so the dashboard's per-direction gauges do not show
+  // misleading numbers.
+  const rxSpeed = online ? payload?.rx_speed ?? s.rxSpeedMbps : 0;
+  const txSpeed = online ? payload?.tx_speed ?? s.txSpeedMbps : 0;
+  const combinedSpeed =
+    online
+      ? payload?.speed ??
+        (payload?.rx_speed != null && payload?.tx_speed != null
+          ? Number((payload.rx_speed + payload.tx_speed).toFixed(1))
+          : s.speedMbps)
+      : 0;
+
   const data = {
     status,
     activeUsers: online ? active : 0,
     pingMs: online ? payload?.ping ?? s.pingMs : 0,
-    speedMbps: online ? payload?.speed ?? s.speedMbps : 0,
+    speedMbps: combinedSpeed,
+    rxSpeedMbps: rxSpeed,
+    txSpeedMbps: txSpeed,
     rxBytes: BigInt(online ? payload?.rx ?? Number(s.rxBytes) : Number(s.rxBytes)),
     txBytes: BigInt(online ? payload?.tx ?? Number(s.txBytes) : Number(s.txBytes)),
     uptimeSec: online ? payload?.uptime ?? s.uptimeSec : 0,
@@ -156,6 +184,8 @@ export async function syncServer(serverId: string) {
         activeUsers: data.activeUsers,
         pingMs: data.pingMs,
         speedMbps: data.speedMbps,
+        rxSpeedMbps: data.rxSpeedMbps,
+        txSpeedMbps: data.txSpeedMbps,
         rxBytes: data.rxBytes,
         txBytes: data.txBytes,
         cpuPercent: data.cpuPercent,
