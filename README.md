@@ -160,14 +160,17 @@ curl http://127.0.0.1:8787/health
 curl -H "X-API-Key: <key>" http://127.0.0.1:8787/api/status
 ```
 
-JSON shape returned by `/api/status` (v1.3 contract):
+JSON shape returned by `/api/status` (v1.4 contract):
 
 ```json
 {
   "ok": true,
   "uptime": 12345, "cpu": 24.1, "ram": 41.2,
   "ping": 14,
-  "speed": 12.4, "rx_speed": 8.2, "tx_speed": 4.2,
+  "link_speed_mbps": 1000,
+  "last_test_down_mbps": 845.6, "last_test_up_mbps": 812.3,
+  "last_test_ping_ms": 14, "last_test_at": "2026-05-31T03:00:14Z",
+  "rx_speed": 8.2, "tx_speed": 4.2, "speed": 12.4,
   "rx": 12345678, "tx": 87654321,
   "active_users": 27,
   "ssh": true, "xray": true, "nginx": true, "udp": false,
@@ -175,11 +178,13 @@ JSON shape returned by `/api/status` (v1.3 contract):
 }
 ```
 
-`rx_speed` and `tx_speed` are realtime network throughput (RX/TX byte
-delta per second). They reflect the traffic actually flowing through
-the VPS, NOT a periodic speedtest. Idle servers report ~0; busy
-servers report the current rate. The combined `speed` field is kept
-for backward compatibility.
+Three speed tiers, three honest answers:
+
+- `link_speed_mbps` → "how big is the pipe?" (kernel NIC link, free)
+- `last_test_*` → "what's the real-world max?" (Ookla, daily off-peak)
+- `rx_speed` / `tx_speed` → "how busy is it now?" (psutil delta)
+
+`speed` is the combined sum, kept for v1.2 / v1.3 dashboards.
 
 `rx`/`tx` reflect the current calendar month on the kernel default-route
 interface (matches `vnstat -m`). `active_users` counts active subscribers

@@ -3,7 +3,7 @@
 Lightweight Python (FastAPI) agent that exposes server health to the
 **PT Sontoloyo Monitor** dashboard. Author: **Pakde Xresx Digital Store**.
 
-Current contract: **v1.3** (split RX/TX throughput).
+Current contract: **v1.4** (3-tier speed display: NIC link + daily Ookla + realtime RX/TX).
 
 ## What it reports
 
@@ -13,48 +13,70 @@ Current contract: **v1.3** (split RX/TX throughput).
 {
   "ok": true,
   "uptime": 12345,
-  "cpu": 24.1,
-  "ram": 41.2,
+  "cpu": 24.1, "ram": 41.2,
   "ping": 14,
+
+  "link_speed_mbps": 1000,
+  "last_test_down_mbps": 845.6,
+  "last_test_up_mbps": 812.3,
+  "last_test_ping_ms": 14,
+  "last_test_at": "2026-05-31T03:00:14Z",
+  "rx_speed": 8.2, "tx_speed": 4.2,
   "speed": 12.4,
-  "rx_speed": 8.2,
-  "tx_speed": 4.2,
-  "rx": 12345678,
-  "tx": 87654321,
+
+  "rx": 12345678, "tx": 87654321,
   "active_users": 27,
-  "ssh": true,
-  "xray": true,
-  "nginx": true,
-  "udp": false,
-  "total_ssh": 38,
-  "total_xray": 0
+  "ssh": true, "xray": true, "nginx": true, "udp": false,
+  "total_ssh": 38, "total_xray": 0
 }
 ```
 
-Field notes:
+### Speed display strategy (3 tiers)
 
-- `rx_speed` / `tx_speed` are realtime **network throughput** (bytes
-  per second through the kernel network counter, divided by the sample
-  interval and converted to Mbps). They reflect the traffic actually
-  flowing through the VPS RIGHT NOW — not a periodic speedtest. Idle
-  servers report ~0 (correct), busy servers report the current data
-  rate. This matches the SPEED line in the Premium auto-installer's
-  main menu.
-- `speed` is `rx_speed + tx_speed` rounded to 1 decimal — kept for
-  backward compatibility with v1.2 dashboards.
-- `rx` / `tx` are the cumulative bytes for the **current calendar
-  month** on the kernel's default-route interface (matches `vnstat -m`).
-- `active_users` counts active subscribers only — SSH lines in
-  `/etc/ssh/.ssh.db` with future expiry plus Xray accounts read from
-  the live `config.json`. The legacy `/etc/xray/.userall.db` log file
-  is NOT consulted.
+The dashboard renders three honest answers to three different visitor
+questions:
 
-Authenticated endpoints (header `X-API-Key`): `/api/status`,
-`/api/system`, `/api/traffic`, `/api/online`.
+| Field | Question | Source | Cost |
+|---|---|---|---|
+| `link_speed_mbps` | "How big is the pipe?" | Kernel-reported NIC link speed | Free |
+| `last_test_*` | "What's the real-world max?" | Ookla CLI, run daily off-peak | ~6 GB/month per server |
+| `rx_speed` / `tx_speed` | "How busy is it now?" | psutil counter delta | Free |
 
-Public endpoint (no auth, CORS-enabled): `GET /health` — small JSON
-heartbeat used by the dashboard's browser-side **LivePing** component
-for realtime latency measurement.
+`link_speed_mbps`: Mbps from the kernel for the default-route
+interface (`1000` = 1 Gbps NIC, `10000` = 10 Gbps). `0` means unknown
+(LXC / Docker veth) — the dashboard renders that as "—".
+
+`last_test_*`: Ookla speedtest result, refreshed once per 24 hours by
+the agent's internal scheduler at the configured local hour (default
+`03:00`). Persisted to `/var/lib/sontoloyo/last_speedtest.json` so it
+survives agent restarts. `last_test_at` is `null` until the first
+benchmark completes.
+
+`rx_speed` / `tx_speed`: realtime download / upload throughput
+(bytes-per-second through the kernel network counter, divided by the
+sample interval and converted to Mbps). Idle = ~0, busy = current
+data rate. Same number you'd see in the Premium auto-installer's
+SPEED line.
+
+`speed`: legacy `rx_speed + tx_speed` combined — kept so v1.2 / v1.3
+dashboards keep working unchanged.
+
+### Other fields
+
+- `rx` / `tx`: cumulative bytes for the **current calendar month** on
+  the kernel's default-route interface. Matches `vnstat -m`.
+- `active_users`: SSH lines in `/etc/ssh/.ssh.db` with future expiry
+  + unique Xray emails read from the live `config.json`. The legacy
+  `/etc/xray/.userall.db` log file is **not** consulted.
+
+### Endpoints
+
+Authenticated (header `X-API-Key`): `/api/status`, `/api/system`,
+`/api/traffic`, `/api/online`.
+
+Public (no auth, CORS-enabled): `GET /health` — small JSON heartbeat
+used by the dashboard's browser-side **LivePing** component for
+realtime latency measurement.
 
 ## Install (Debian / Ubuntu)
 
@@ -63,17 +85,23 @@ for realtime latency measurement.
 sudo SONTOLOYO_API_KEY="$(openssl rand -hex 24)" bash install.sh
 ```
 
-The installer is **idempotent** — re-run after `git pull` to upgrade
-the agent in place. API key is preserved unless you set a new one.
+`install.sh` is **idempotent** — re-run after `git pull` to upgrade
+the agent in place. The API key is preserved unless you set a new one.
 
 It:
 
 1. Installs `python3-venv`, `iproute2`, `iputils-ping`, `curl`.
-2. Copies the agent to `/opt/sontoloyo-agent` and creates a `.venv`.
-3. Writes `/etc/sontoloyo-agent.env` with `SONTOLOYO_API_KEY`,
-   `SONTOLOYO_HOST`, `SONTOLOYO_PORT`.
-4. Installs and starts the `sontoloyo-agent.service` systemd unit.
-5. Opens the firewall port via `ufw` (if present).
+2. Adds the Ookla repo and installs the official `speedtest` CLI
+   (used for the daily benchmark). If the repo is unreachable the
+   install continues without speedtest — the dashboard simply reports
+   "Belum diuji" for the tested tier and keeps working.
+3. Pre-accepts the Ookla license/GDPR so the scheduler can run
+   non-interactively.
+4. Creates `/var/lib/sontoloyo` for the speedtest cache file.
+5. Copies the agent to `/opt/sontoloyo-agent` and creates a `.venv`.
+6. Writes `/etc/sontoloyo-agent.env`.
+7. Installs and starts the `sontoloyo-agent.service` systemd unit.
+8. Opens the firewall port via `ufw` (if present).
 
 ## Manual test
 
@@ -81,6 +109,11 @@ It:
 curl http://127.0.0.1:8787/health
 curl -H "X-API-Key: $YOUR_KEY" http://127.0.0.1:8787/api/status
 ```
+
+The first `/api/status` call right after install will return
+`last_test_*` as zeros and `last_test_at` as `null` — the initial
+benchmark runs in a background thread shortly after agent startup
+(~30-60 s). Subsequent calls return the cached result.
 
 ## Connect to dashboard
 
@@ -107,14 +140,28 @@ Tune via environment variables in `/etc/sontoloyo-agent.env`:
 | `SONTOLOYO_API_KEY` | (auto-generated) | Bearer token required by `/api/*` endpoints |
 | `SONTOLOYO_HOST` | `0.0.0.0` | Bind address. Set to `127.0.0.1` after Cloudflare Tunnel is up. |
 | `SONTOLOYO_PORT` | `8787` | TCP port |
-| `SONTOLOYO_CACHE_TTL` | `3` | Seconds to memoize the heavy probes (cek-vme, vnstat, ping) |
-| `SONTOLOYO_CORS_ORIGINS` | `*` | Comma-separated allowlist for `/health` CORS. Tighten in production: `https://monitoring.example.com` |
+| `SONTOLOYO_CACHE_TTL` | `3` | Seconds to memoize `/api/status` (cek-vme, vnstat, ping) |
+| `SONTOLOYO_CORS_ORIGINS` | `*` | Comma-separated allowlist for `/health` CORS |
+| `SONTOLOYO_SPEEDTEST_HOUR` | `3` | Local hour-of-day to run the Ookla benchmark (0-23) |
+| `SONTOLOYO_SPEEDTEST_INTERVAL` | `24` | Hours between benchmark runs |
+| `SONTOLOYO_SPEEDTEST_CACHE` | `/var/lib/sontoloyo/last_speedtest.json` | Persistence path |
+| `SONTOLOYO_SPEEDTEST_TIMEOUT` | `300` | Subprocess wallclock cap (seconds) |
+| `SONTOLOYO_SPEEDTEST_DISABLE` | (unset) | Set to `1` to skip benchmarking entirely |
 
 ## Operations
 
 ```bash
 # logs
 journalctl -u sontoloyo-agent -f
+
+# tail just the speedtest scheduler lines
+journalctl -u sontoloyo-agent -f | grep "\[speedtest\]"
+
+# inspect last benchmark
+cat /var/lib/sontoloyo/last_speedtest.json
+
+# trigger manual speedtest right now (debug)
+speedtest --format=json --accept-license --accept-gdpr
 
 # restart
 systemctl restart sontoloyo-agent
@@ -152,20 +199,29 @@ ground truth caused a real-world bug where the dashboard reported 41
   systemctl restart sontoloyo-agent
   ufw delete allow 8787/tcp
   ```
-  The agent will only be reachable through the tunnel hostname,
-  keeping port 8787 invisible to the internet.
 - Tighten `SONTOLOYO_CORS_ORIGINS` to only your dashboard domain in
   production.
 
-## Migration from v1.2
+## Migration from v1.3
 
-If your dashboard already runs v1.2 of the agent:
+If your dashboard already runs v1.3 of the agent:
 
 1. `git pull` the latest agent code.
-2. Re-run `bash install.sh` (idempotent — keeps your existing API key).
-3. The new payload includes `rx_speed` and `tx_speed`. Older
-   dashboards that only read `speed` continue to work because the
-   agent still sends that field (sum of rx + tx).
+2. Re-run `bash install.sh` (idempotent — installs the Ookla CLI and
+   keeps your existing API key).
+3. The new payload includes `link_speed_mbps`, `last_test_*` fields.
+   Older v1.3 dashboards continue to work because they ignore unknown
+   fields and the existing `rx_speed`/`tx_speed`/`speed` fields are
+   unchanged.
 4. If your dashboard is also upgraded, run `npx prisma db push` on it
-   to add the new `rxSpeedMbps` / `txSpeedMbps` columns. The migration
-   is non-destructive.
+   to add the new `linkSpeedMbps` / `lastSpeedtest*` columns. The
+   migration is non-destructive.
+
+## Bandwidth impact
+
+The Ookla CLI transfers ~100-300 MB per benchmark run. With the
+default `SONTOLOYO_SPEEDTEST_INTERVAL=24`, that's ~6 GB/month per
+server — comfortably under any common VPS bandwidth cap.
+
+To reduce further: `SONTOLOYO_SPEEDTEST_INTERVAL=72` (3 days) cuts
+that to ~2 GB/month. To disable entirely: `SONTOLOYO_SPEEDTEST_DISABLE=1`.

@@ -65,6 +65,22 @@ model Server {
   /// Realtime upload throughput (TX) in Mbps — the rate at which
   /// bytes are flowing OUT of the VPS network interface right now.
   txSpeedMbps  Float    @default(0)
+
+  /// NIC link speed (kernel-reported port capacity) in Mbps. Static
+  /// baseline displayed as the "Port" tier on the public homepage —
+  /// e.g. 1000 → "1 Gbps", 10000 → "10 Gbps". 0 means unknown
+  /// (typical for LXC / Docker veth interfaces) and the UI renders
+  /// it as "—" without dashboarding the line.
+  linkSpeedMbps          Int       @default(0)
+
+  /// Last completed Ookla speedtest result, refreshed once per
+  /// 24 hours by the agent's internal scheduler at the configured
+  /// off-peak hour (default 03:00 local). Zero / null when the
+  /// benchmark has not yet run on a freshly-installed agent.
+  lastSpeedtestDownMbps  Float     @default(0)
+  lastSpeedtestUpMbps    Float     @default(0)
+  lastSpeedtestPingMs    Int       @default(0)
+  lastSpeedtestAt        DateTime?
   rxBytes      BigInt   @default(0)
   txBytes      BigInt   @default(0)
   uptimeSec    Int      @default(0)

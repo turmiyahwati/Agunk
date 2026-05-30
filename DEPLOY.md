@@ -728,10 +728,10 @@ sqlite3 prisma/prod.db "PRAGMA integrity_check;"  # ok
 
 ## 13. Bandwidth & Cost Estimation
 
-Penting untuk operator menyiapkan kapasitas VPS sebelum traffic ramai.
-Sejak v1.3 fitur browser-side speedtest dihapus — speed di card sekarang
-diambil langsung dari throughput RX/TX VPS realtime, jauh lebih hemat
-bandwidth dibanding versi sebelumnya.
+Sejak v1.4 dashboard menampilkan **3 tier** speed: Port Capacity (free),
+Tested Speed (Ookla daily), dan Live Traffic (RX/TX gratis). Tambahan
+~6 GB/bulan per server untuk daily benchmark — masih jauh di bawah quota
+VPS provider standar.
 
 ### Per-aktivitas (diukur real)
 
@@ -743,6 +743,7 @@ bandwidth dibanding versi sebelumnya.
 | Polling `/api/stats` | ~1 KB | tiap 10 detik selama tab aktif |
 | **LivePing** ke agent `/health` | ~200 bytes (req+res) | tiap 2.5 detik selama tab aktif |
 | Sync agent → DB (auto-sync) | ~3 KB (request+response) | tiap 30-60 detik per server |
+| **Daily Ookla benchmark** | ~200 MB | 1× per 24 jam per server (off-peak) |
 
 ### Skenario realistis (asumsi 5 menit / visitor, scroll 3 server)
 
@@ -751,44 +752,44 @@ bandwidth dibanding versi sebelumnya.
 | Komponen | Bandwidth/hari |
 |---|---|
 | VPS Dashboard (semua traffic visitor) | ~145 MB |
-| VPS Agent per server (sync + ping) | ~5 MB |
-| **Total (2 server)** | **~155 MB/hari = ~5 GB/bulan** |
+| VPS Agent — sync + ping | ~5 MB |
+| VPS Agent — daily Ookla | ~200 MB |
+| **Total (2 server)** | **~555 MB/hari = ~17 GB/bulan** |
 
 #### Menengah — 2,000 visitor/hari, 5 server
 
 | Komponen | Bandwidth/hari |
 |---|---|
 | VPS Dashboard | ~1.4 GB |
-| VPS Agent per server | ~50 MB |
-| **Total (5 server)** | **~1.7 GB/hari = ~50 GB/bulan** |
+| VPS Agent — sync + ping per server | ~50 MB |
+| VPS Agent — daily Ookla per server | ~200 MB |
+| **Total (5 server)** | **~2.7 GB/hari = ~80 GB/bulan** |
 
 #### Besar — 10,000 visitor/hari, 10 server
 
 | Komponen | Bandwidth/hari |
 |---|---|
 | VPS Dashboard | ~7 GB |
-| VPS Agent per server | ~250 MB |
-| **Total (10 server)** | **~9.5 GB/hari = ~285 GB/bulan** |
+| VPS Agent — sync + ping per server | ~250 MB |
+| VPS Agent — daily Ookla per server | ~200 MB |
+| **Total (10 server)** | **~11.5 GB/hari = ~345 GB/bulan** |
 
-### Mengapa bandwidth turun drastis?
+### Tuning kalau bandwidth tipis
 
-Versi sebelumnya (v1.2) menjalankan `LiveSpeed` browser-side speedtest
-yang transfer 2 MB download + 1 MB upload per visitor per server card.
-Untuk skenario menengah itu memakan **~10 GB/hari**. Sekarang tidak
-ada speedtest sama sekali — speed ditampilkan langsung dari throughput
-RX/TX server-side yang sudah otomatis di-sync.
-
-### Tuning lain yang masih relevan
+Override di `/etc/sontoloyo-agent.env`:
 
 ```env
-# di .env dashboard — interval polling frontend (default 10s)
-NEXT_PUBLIC_REFRESH_MS=10000
+# Default: jalan tiap 24 jam jam 03:00 lokal. Bisa jarang-kan untuk hemat.
+SONTOLOYO_SPEEDTEST_INTERVAL=72   # tiap 3 hari (cut benchmark cost 67%)
+
+# Atau matikan total — Tested tier akan tampil "Belum diuji"
+SONTOLOYO_SPEEDTEST_DISABLE=1
+
+# Off-peak hour (default 03:00 lokal). Beda kalau target di timezone lain.
+SONTOLOYO_SPEEDTEST_HOUR=2
 ```
 
-```env
-# di /etc/sontoloyo-agent.env — CORS untuk /health (LivePing)
-SONTOLOYO_CORS_ORIGINS=https://monitor.example.com
-```
+Restart agent: `systemctl restart sontoloyo-agent`.
 
 ### Monitor bandwidth aktual setelah deploy
 
@@ -799,6 +800,9 @@ vnstat -m                                # monthly total
 
 # realtime (paling jelas)
 nethogs eth0
+
+# isi cache speedtest terakhir
+cat /var/lib/sontoloyo/last_speedtest.json
 ```
 
 ---

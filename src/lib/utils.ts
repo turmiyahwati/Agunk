@@ -53,6 +53,72 @@ export function formatSpeed(mbps: number | null | undefined, suffix = "Mb"): str
 }
 
 /**
+ * Render the kernel-reported NIC link speed as a human-friendly capacity
+ * label. The agent reports the value in Mbps; we promote to Gbps once the
+ * number gets unwieldy. Returns "—" when the kernel could not determine
+ * the link speed (typical for LXC / Docker veth interfaces) so the
+ * dashboard does not lie about a 0 Gbps pipe that does not exist.
+ *
+ *   0           → "—"
+ *   1..999      → "100 Mbps"
+ *   1000..9999  → "1 Gbps"
+ *   >= 10000    → "10 Gbps"
+ */
+export function formatLinkSpeed(mbps: number | null | undefined): string {
+  if (mbps == null || !isFinite(mbps) || mbps <= 0) return "—";
+  if (mbps >= 1000) {
+    const gbps = mbps / 1000;
+    return Number.isInteger(gbps) ? `${gbps} Gbps` : `${gbps.toFixed(1)} Gbps`;
+  }
+  return `${Math.round(mbps)} Mbps`;
+}
+
+/**
+ * Format a Mbps reading from a periodic Ookla speedtest result.
+ *
+ * Distinct from `formatSpeed` which formats live throughput: for a
+ * tested baseline, sub-Mbps precision adds noise rather than information
+ * and large numbers are the headline. Returns "—" when no test has run
+ * yet so the dashboard can show "Belum diuji" instead of a misleading
+ * zero.
+ *
+ *   0          → "—"
+ *   1..99      → "85"
+ *   100+       → "845"
+ */
+export function formatTestedSpeed(mbps: number | null | undefined): string {
+  if (mbps == null || !isFinite(mbps) || mbps <= 0) return "—";
+  return Math.round(mbps).toString();
+}
+
+/**
+ * Compact "time ago" caption for the speedtest freshness label.
+ *
+ * Shorter than the full Indonesian `timeAgo` which renders
+ * "5 menit lalu" — the speedtest tier wants something that fits beside
+ * a number on a small server card without wrapping.
+ *
+ *   null/invalid → "belum diuji"
+ *   < 60s        → "barusan"
+ *   < 60m        → "Xm lalu"
+ *   < 24h        → "Xh lalu"
+ *   else         → "Xd lalu"
+ */
+export function formatRelativeAge(input: Date | string | null | undefined): string {
+  if (!input) return "belum diuji";
+  const d = input instanceof Date ? input : new Date(input);
+  if (isNaN(d.getTime())) return "belum diuji";
+  const seconds = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+  if (seconds < 60) return "barusan";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m lalu`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h lalu`;
+  const days = Math.floor(hours / 24);
+  return `${days}d lalu`;
+}
+
+/**
  * Indonesian relative-time formatter used by the activity log.
  *  < 5s  → "baru saja"
  *  < 60s → "X detik lalu"

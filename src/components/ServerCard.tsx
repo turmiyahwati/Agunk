@@ -3,11 +3,19 @@ import { memo } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
-import { Activity, Download, Upload, Gauge, Users, ArrowRight } from "lucide-react";
+import { Activity, Download, Upload, Network, Gauge, Users, ArrowRight } from "lucide-react";
 import { StatusBadge } from "./ui/StatusBadge";
 import { ProgressBar } from "./ui/ProgressBar";
 import { LivePing } from "./LivePing";
-import { flagUrl, slotPercent, formatBytes, formatUptime } from "@/lib/utils";
+import {
+  flagUrl,
+  slotPercent,
+  formatBytes,
+  formatUptime,
+  formatLinkSpeed,
+  formatTestedSpeed,
+  formatRelativeAge,
+} from "@/lib/utils";
 
 export type ServerSummary = {
   id: string;
@@ -32,6 +40,14 @@ export type ServerSummary = {
   rxSpeedMbps?: number;
   /** Upload throughput in Mbps — realtime traffic flowing OUT of the VPS. */
   txSpeedMbps?: number;
+  /** NIC port capacity in Mbps (e.g. 1000 = 1 Gbps). 0 = unknown. */
+  linkSpeedMbps?: number;
+  /** Latest periodic Ookla speedtest result. 0 = never tested. */
+  lastSpeedtestDownMbps?: number;
+  lastSpeedtestUpMbps?: number;
+  lastSpeedtestPingMs?: number;
+  /** ISO timestamp of the last successful speedtest (or null). */
+  lastSpeedtestAt?: string | null;
   rxBytes: number;
   txBytes: number;
   uptimeSec: number;
@@ -46,12 +62,12 @@ export type ServerSummary = {
 };
 
 /**
- * Render a Mbps reading with sensible precision.
+ * Live-throughput formatter for the bottom-tier RX/TX block.
  *   < 1   → "0.x"
  *   < 10  → "X.Y"
  *   >= 10 → "NN"
  */
-function fmtMbps(mbps: number | null | undefined): string {
+function fmtLiveMbps(mbps: number | null | undefined): string {
   if (mbps == null || !isFinite(mbps) || mbps <= 0) return "0";
   if (mbps < 10) return mbps.toFixed(1);
   return Math.round(mbps).toString();
@@ -61,6 +77,10 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
   const pct = slotPercent(server.activeUsers, server.maxSlot);
   const rx = server.rxSpeedMbps ?? 0;
   const tx = server.txSpeedMbps ?? 0;
+  const testedDown = server.lastSpeedtestDownMbps ?? 0;
+  const testedUp = server.lastSpeedtestUpMbps ?? 0;
+  const hasTested = testedDown > 0 || testedUp > 0;
+  const portLabel = formatLinkSpeed(server.linkSpeedMbps);
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
@@ -106,27 +126,58 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
       </div>
 
       {/*
-        Realtime network throughput, split per direction. These are TRUE
-        bytes-per-second readings from the VPS network counter — not a
-        periodic speedtest. An idle server reports ~0; a busy server
-        reports the current data rate. Same number you'd see in the
-        Premium auto-installer's main menu SPEED line.
+        ── 3-Tier Network Performance ────────────────────────────────────
+        Tier 1: Port Capacity   (NIC link speed, kernel — e.g. "1 Gbps")
+        Tier 2: Tested Speed    (daily Ookla benchmark — e.g. "845/812 Mbps · 6h lalu")
+        Tier 3: Live Traffic    (RX/TX realtime — current load)
+
+        Each tier answers a different visitor question honestly: how big
+        is the pipe, what's the real-world max, and how busy is it now.
+        Labeled clearly so a non-technical buyer never confuses a tested
+        capacity number with their own expected VPN speed.
       */}
-      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-        <div className="rounded-lg border border-cyan-400/15 bg-cyan-400/5 p-2">
-          <div className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-cyan-300/80">
-            <Download size={11} /> Download
-          </div>
-          <div className="font-mono text-sm text-slate-100">{fmtMbps(rx)} Mbps</div>
+      <div className="mt-3 rounded-xl border border-white/5 bg-white/[0.02] p-3">
+        <div className="mb-2 flex items-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
+          <Network size={11} /> Network Performance
         </div>
-        <div className="rounded-lg border border-fuchsia-400/15 bg-fuchsia-400/5 p-2">
-          <div className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-fuchsia-300/80">
-            <Upload size={11} /> Upload
+
+        <div className="space-y-1.5 text-xs">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-slate-400">Port</span>
+            <span className="font-mono text-slate-200">{portLabel}</span>
           </div>
-          <div className="font-mono text-sm text-slate-100">{fmtMbps(tx)} Mbps</div>
-        </div>
-        <div className="col-span-2 -mt-1 inline-flex items-center gap-1 text-[9px] text-slate-600">
-          <Activity size={9} /> Realtime traffic dari VPS
+
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-slate-400">Tested</span>
+            {hasTested ? (
+              <span className="font-mono text-slate-200">
+                {formatTestedSpeed(testedDown)}
+                <span className="text-slate-500"> / </span>
+                {formatTestedSpeed(testedUp)}
+                <span className="text-[10px] text-slate-500"> Mbps</span>
+                <span className="ml-1 text-[10px] text-slate-500">
+                  · {formatRelativeAge(server.lastSpeedtestAt)}
+                </span>
+              </span>
+            ) : (
+              <span className="text-[11px] italic text-slate-500">Belum diuji</span>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between gap-2 border-t border-white/5 pt-1.5">
+            <span className="inline-flex items-center gap-1 text-slate-400">
+              <Activity size={10} className="text-cyan-300" />
+              Live
+            </span>
+            <span className="font-mono text-slate-200">
+              <Download size={10} className="mb-0.5 mr-0.5 inline text-cyan-300/80" />
+              {fmtLiveMbps(rx)}
+              <span className="mx-1 text-slate-500"></span>
+              <Upload size={10} className="mb-0.5 mr-0.5 inline text-fuchsia-300/80" />
+              {fmtLiveMbps(tx)}
+              <span className="text-[10px] text-slate-500"> Mbps</span>
+            </span>
+          </div>
         </div>
       </div>
 
