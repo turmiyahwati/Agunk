@@ -160,19 +160,30 @@ curl http://127.0.0.1:8787/health
 curl -H "X-API-Key: <key>" http://127.0.0.1:8787/api/status
 ```
 
-JSON shape returned by `/api/status`:
+JSON shape returned by `/api/status` (v1.2 contract):
 
 ```json
 {
   "ok": true,
   "uptime": 12345, "cpu": 24.1, "ram": 41.2,
-  "ping": 14, "speed": 940,
+  "ping": 14, "speed": 0.6,
   "rx": 12345678, "tx": 87654321,
-  "active_users": 87,
+  "active_users": 27,
   "ssh": true, "xray": true, "nginx": true, "udp": false,
-  "total_ssh": 120, "total_xray": 80
+  "total_ssh": 38, "total_xray": 0
 }
 ```
+
+`speed` is a **float** (1 decimal) — values <1 Mbps are valid.
+`rx`/`tx` reflect the current calendar month on the kernel default-route
+interface (matches `vnstat -m`). `active_users` counts active subscribers
+(SSH lines with future expiry + unique Xray emails in `config.json`).
+
+Public probe endpoints (no auth, CORS-enabled, rate-limited):
+
+- `GET /api/probe/download?bytes=N` — streams up to 10 MB for browser-side download speedtest
+- `POST /api/probe/upload` — accepts up to 10 MB for browser-side upload speedtest
+- `GET /health` — 100-byte JSON heartbeat for browser-side live ping
 
 The agent auto-restarts via systemd. Logs: `journalctl -u sontoloyo-agent -f`.
 

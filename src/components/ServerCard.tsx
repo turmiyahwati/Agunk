@@ -3,10 +3,12 @@ import { memo } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
-import { Activity, Gauge, Users, Wifi, ArrowRight } from "lucide-react";
+import { Gauge, Users, ArrowRight } from "lucide-react";
 import { StatusBadge } from "./ui/StatusBadge";
 import { ProgressBar } from "./ui/ProgressBar";
-import { flagUrl, slotPercent, formatBytes, formatUptime, formatSpeed } from "@/lib/utils";
+import { LivePing } from "./LivePing";
+import { LiveSpeed } from "./LiveSpeed";
+import { flagUrl, slotPercent, formatBytes, formatUptime } from "@/lib/utils";
 
 export type ServerSummary = {
   id: string;
@@ -31,6 +33,12 @@ export type ServerSummary = {
   uptimeSec: number;
   cpuPercent?: number;
   ramPercent?: number;
+  /**
+   * Public-safe Cloudflare-Tunnel hostname for browser-side LivePing /
+   * LiveSpeed. Operator sets this in admin → Servers. Optional — when
+   * absent the card falls back to server-reported numbers.
+   */
+  pingHost?: string | null;
 };
 
 function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string }) {
@@ -55,13 +63,34 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
         <StatusBadge status={server.status} />
       </div>
 
-      <div className="mt-4 grid grid-cols-3 gap-3 text-xs">
-        <Stat icon={<Wifi size={14} />}     label="Ping"   value={server.pingMs ? `${server.pingMs} ms` : "—"} />
-        <Stat icon={<Activity size={14} />} label="Speed"  value={formatSpeed(server.speedMbps)} />
-        <Stat icon={<Gauge size={14} />}    label="Uptime" value={formatUptime(server.uptimeSec)} />
+      {/* Live ping + uptime. The ping number updates every 2.5s straight from
+          the visitor's browser when `pingHost` is configured — that's the
+          "true realtime" gauge that customers can trust. */}
+      <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+        <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2">
+          <div className="mb-0.5 text-[10px] uppercase tracking-wider text-slate-500">
+            Ping (live)
+          </div>
+          <div className="text-sm">
+            <LivePing host={server.pingHost} fallback={server.pingMs} />
+          </div>
+        </div>
+        <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2">
+          <div className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
+            <Gauge size={11} /> Uptime
+          </div>
+          <div className="text-sm font-mono text-slate-100">{formatUptime(server.uptimeSec)}</div>
+        </div>
       </div>
 
-      <div className="mt-5">
+      {/* Speedtest measured live from the visitor's browser. Auto-runs
+          once when this card scrolls into view; falls back gracefully
+          when the browser blocks cross-origin probes. */}
+      <div className="mt-3">
+        <LiveSpeed host={server.pingHost} fallbackMbps={server.speedMbps} />
+      </div>
+
+      <div className="mt-4">
         <div className="mb-1 flex items-center justify-between text-xs">
           <span className="text-slate-400 inline-flex items-center gap-1.5">
             <Users size={13} /> Slot
@@ -81,17 +110,6 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
         )}
       </div>
     </motion.div>
-  );
-}
-
-function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2">
-      <div className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
-        {icon} {label}
-      </div>
-      <div className="text-sm font-mono text-slate-100">{value}</div>
-    </div>
   );
 }
 

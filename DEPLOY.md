@@ -360,7 +360,17 @@ systemctl reload nginx
 - **Security → WAF → Managed Rules** → ON
 - **Security → Bots → Bot Fight Mode** → ON
 - **Speed → Optimization → Brotli + Auto Minify (HTML/CSS/JS)** → ON
-- **Page Rule** untuk `monitoring.pakde-premium.xyz/api/*` → Cache Level Bypass
+- **Network → WebSockets** → **ON** ⚠️ wajib supaya streaming response dari probe endpoint tidak terpotong
+- **Network → HTTP/3 (QUIC)** → ON (mempercepat first byte)
+- **Page Rule** untuk `monitoring.pakde-premium.xyz/api/*` → Cache Level **Bypass**
+- **Page Rule** untuk `agent-*.pakde-premium.xyz/api/probe/*` → Cache Level **Bypass** (probe response **tidak boleh** di-cache, karena harus stream bytes baru tiap request)
+- **Page Rule** untuk `agent-*.pakde-premium.xyz/health` → Cache Level **Bypass** (live ping butuh response real-time)
+
+⚠️ **Settings yang HARUS dihindari**:
+
+- **Speed → Optimization → Rocket Loader** = OFF (suka break Next.js hydration)
+- **Speed → Optimization → Email Address Obfuscation** = OFF (mengganggu rendering JS)
+- **Caching → Cache Level: Cache Everything global** = JANGAN — `/api/*` dan probe endpoint harus bypass
 
 ### 5.6. Test HTTPS
 
@@ -532,15 +542,17 @@ Buka `https://monitoring.pakde-premium.xyz/admin/servers` → login admin.
 2. Isi:
    - **Nama**: `INDO INDO 1` (bebas)
    - **Provider**: `BiznetGio` / `Vultr` / dst
-   - **Domain / IP**: IP atau hostname VPS target *(disimpan di DB, tidak ekspos ke public)*
+   - **Domain / IP**: IP atau hostname VPS target *(disimpan privat — admin saja, tidak ekspos ke public)*
    - **Country code**: `ID`
    - **Country name**: `Indonesia`
    - **Max Slot**: `100`
    - **VPS Agent base URL**: `https://agent-id1.pakde-premium.xyz` ← **HTTPS, tanpa port, tanpa /api/status**
    - **API Key**: paste API key dari Step 6.2
+   - **Public Ping Host**: `agent-id1.pakde-premium.xyz` ← **WAJIB diisi** untuk fitur browser-side LivePing & LiveSpeed pada homepage. Pakai Cloudflare Tunnel hostname yang sama dengan agent base URL **tanpa scheme & path**. **Jangan pakai IP VPS asli** — visitor akan melihat hostname ini.
 3. **Simpan**
 4. Klik tombol **Wifi icon** di baris itu → toast hijau "Agent reachable · synced" ✅
 5. Tunggu maks 1 menit (atau klik **Sync now** di topbar admin) → status berubah jadi **ONLINE** dengan angka CPU/RAM beneran 🎉
+6. Buka homepage publik di tab incognito → server card harus tampilkan **ping live (update tiap 2.5 detik)** dan **download/upload Mbps real** yang diukur langsung dari browser visitor.
 
 **Ulangi Step 6, 7, 8 untuk tiap VPS target.** Tiap VPS dapat subdomain Cloudflare sendiri.
 
@@ -715,6 +727,101 @@ sqlite3 prisma/prod.db "PRAGMA integrity_check;"  # ok
 
 ---
 
+## 13. Bandwidth & Cost Estimation
+
+Penting untuk operator menyiapkan kapasitas VPS sebelum traffic ramai.
+Setiap halaman publik dan setiap probe browser memakan bandwidth — ini
+breakdown untuk perencanaan kapasitas.
+
+### Per-aktivitas (diukur real)
+
+| Aktivitas | Ukuran tiap call | Frekuensi |
+|---|---|---|
+| Homepage page load (cold) | ~500 KB | 1× per visitor session |
+| Homepage page load (cached) | ~50 KB | repeat visit |
+| Polling `/api/servers/public` | ~5 KB | tiap 10 detik selama tab aktif |
+| Polling `/api/stats` | ~1 KB | tiap 10 detik selama tab aktif |
+| **LivePing** ke agent | ~200 bytes (req+res) | tiap 2.5 detik selama tab aktif |
+| **LiveSpeed download** | 2 MB (default) | 1× saat card masuk viewport |
+| **LiveSpeed upload** | 1 MB (default) | 1× saat card masuk viewport |
+| Sync agent → DB (auto-sync) | ~3 KB (request+response) | tiap 30-60 detik per server |
+
+### Skenario realistis
+
+#### Kecil — 200 visitor/hari, 2 server
+
+| Komponen | Bandwidth/hari |
+|---|---|
+| VPS Dashboard (semua traffic visitor) | ~145 MB |
+| VPS Agent per server (sync + ping + speedtest) | ~250 MB |
+| **Total (2 server)** | **~645 MB/hari = ~20 GB/bulan** |
+
+#### Menengah — 2,000 visitor/hari, 5 server
+
+| Komponen | Bandwidth/hari |
+|---|---|
+| VPS Dashboard | ~1.4 GB |
+| VPS Agent per server | ~2 GB |
+| **Total (5 server)** | **~11 GB/hari = ~330 GB/bulan** |
+
+#### Besar — 10,000 visitor/hari, 10 server
+
+| Komponen | Bandwidth/hari |
+|---|---|
+| VPS Dashboard | ~7 GB |
+| VPS Agent per server | ~10 GB |
+| **Total (10 server)** | **~107 GB/hari = ~3.2 TB/bulan** |
+
+### Tuning saat bandwidth tipis
+
+Set ini di `.env` dashboard (perubahan butuh `pm2 reload`):
+
+```env
+# Disable auto-run speedtest (visitor harus klik "Test" manual)
+NEXT_PUBLIC_SPEEDTEST_AUTO=false
+
+# Turunkan ukuran sample (default 2MB / 1MB)
+NEXT_PUBLIC_SPEEDTEST_DOWNLOAD_BYTES=1000000   # 1 MB
+NEXT_PUBLIC_SPEEDTEST_UPLOAD_BYTES=500000      # 500 KB
+
+# Naikkan TTL cache di sessionStorage browser (default 5 menit)
+NEXT_PUBLIC_SPEEDTEST_CACHE_MS=900000          # 15 menit
+```
+
+Set ini di `/etc/sontoloyo-agent.env` (rate-limit agent):
+
+```env
+# Default 12 probe/menit/IP. Turunkan kalau ada abuse.
+SONTOLOYO_PROBE_RATE_LIMIT=6
+SONTOLOYO_PROBE_RATE_WINDOW=60
+
+# Hard cap byte (default 10 MB). Turunkan untuk paksa visitor pakai sample kecil.
+SONTOLOYO_PROBE_MAX_BYTES=2097152              # 2 MB
+```
+
+### Disable browser probes sepenuhnya
+
+Kalau Anda mau sementara matikan fitur LivePing/LiveSpeed di homepage:
+
+1. Di Admin → Servers → Edit → Kosongkan field "Public Ping Host" untuk
+   semua server. Card otomatis fallback ke angka server-side dari agent.
+2. Atau set `SONTOLOYO_CORS_ORIGINS=https://localhost.invalid` di
+   agent — browser visitor akan kena CORS error, fallback otomatis aktif.
+
+### Monitor bandwidth aktual setelah deploy
+
+```bash
+# di VPS dashboard
+vnstat -d                                # daily breakdown
+vnstat -m                                # monthly total
+nethogs eth0                             # which process is hogging?
+
+# di VPS agent
+journalctl -u sontoloyo-agent --since today | grep "probe" | wc -l
+```
+
+---
+
 ## Lampiran A — Migrasi dari deployment lama
 
 Kalau kamu pernah deploy versi lama (tanpa Cloudflare Tunnel) dan agent gagal terhubung:
@@ -740,7 +847,12 @@ Setelah migrasi, kamu boleh tutup port 8787 di UFW VPS target (Step 7.7).
 - ✅ Script VPN/Xray existing (autoscript, installer Vladiyot, Apik, dll)
 - ✅ Konfigurasi Xray (`/usr/local/etc/xray/config.json`)
 - ✅ Provisioning/seller API di port **5888** (tetap jalan paralel)
-- ✅ Database akun VPN (`/etc/ssh/.ssh.db`, `/etc/xray/.userall.db`) — agent **read-only**
+- ✅ Database akun VPN — agent **read-only**:
+  - SSH: `/etc/ssh/.ssh.db` (count, parse expiry)
+  - Xray: `/usr/local/etc/xray/config.json` (count `"email"` entries)
+  - File log lawas `/etc/xray/.userall.db` **tidak dibaca** karena
+    sering berisi entri ghost (akun lama yang sudah dihapus dari panel
+    masih jejaknya di file log).
 - ✅ HAProxy/nginx config existing di VPS target
 - ✅ AUTH_KEY seller (terpisah dari `SONTOLOYO_API_KEY`)
 

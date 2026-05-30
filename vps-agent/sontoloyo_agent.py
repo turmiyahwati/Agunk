@@ -7,12 +7,27 @@ exposes a minimal HTTP API consumed by the PT Sontoloyo Monitor dashboard.
 
 Author: Pakde Xresx Digital Store
 
-HTTP API (UNCHANGED — stable contract):
-    GET /health                   public, no auth
-    GET /api/status               requires X-API-Key header
-    GET /api/system               requires X-API-Key header
-    GET /api/traffic              requires X-API-Key header
-    GET /api/online               requires X-API-Key header
+HTTP API:
+
+    GET  /health                       public, no auth — used by browser
+                                       clients for live ping latency probes
+    GET  /api/status                   requires X-API-Key header
+    GET  /api/system                   requires X-API-Key header
+    GET  /api/traffic                  requires X-API-Key header
+    GET  /api/online                   requires X-API-Key header
+
+    GET  /api/probe/download?bytes=N   public, no auth — streams N bytes
+                                       (max 10 MB) for browser-side
+                                       download speedtest from visitors
+                                       on the public homepage
+    POST /api/probe/upload             public, no auth — accepts up to
+                                       10 MB body for upload speedtest;
+                                       returns the byte count back
+
+The /api/probe/* endpoints are CORS-allowed for the dashboard's public
+domain so the LivePing / LiveSpeed components in the visitor's browser
+can call them directly. They are rate-limited per source IP to prevent
+bandwidth abuse — typical homepage traffic stays well within the limit.
 
 JSON shape returned by /api/status:
 
@@ -53,16 +68,38 @@ import json
 import time
 import socket
 import subprocess
+import secrets
 import threading
+from collections import deque
 from datetime import datetime
 from typing import Optional, Callable, TypeVar
 
 import psutil
-from fastapi import FastAPI, Header, HTTPException, status
+from fastapi import FastAPI, Header, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 API_KEY = os.environ.get("SONTOLOYO_API_KEY", "change-me")
 HOST = os.environ.get("SONTOLOYO_HOST", "0.0.0.0")
 PORT = int(os.environ.get("SONTOLOYO_PORT", "8787"))
+
+# CORS allowlist for the public probe endpoints. The dashboard's public
+# domain is the only origin that legitimately calls /api/probe/* from a
+# visitor's browser. Operators can override via SONTOLOYO_CORS_ORIGINS
+# (comma-separated list) when running multiple dashboards or staging.
+# Default "*" lets any dashboard work out-of-the-box; tighten in
+# production by exporting SONTOLOYO_CORS_ORIGINS=https://monitoring.example.com
+_CORS_ORIGINS = [
+    o.strip() for o in os.environ.get("SONTOLOYO_CORS_ORIGINS", "*").split(",")
+    if o.strip()
+]
+
+# Public probe endpoint sizing & rate limiting. Defaults are conservative
+# enough for a small homepage but generous enough that one visitor with
+# 6 server cards on screen can refresh once each per minute.
+_PROBE_MAX_BYTES = int(os.environ.get("SONTOLOYO_PROBE_MAX_BYTES", str(10 * 1024 * 1024)))
+_PROBE_RATE_LIMIT = int(os.environ.get("SONTOLOYO_PROBE_RATE_LIMIT", "12"))
+_PROBE_RATE_WINDOW = float(os.environ.get("SONTOLOYO_PROBE_RATE_WINDOW", "60"))
 
 # Per-call result cache (TTL seconds). Lets us make /api/status return in
 # milliseconds even though the underlying probes (cek-vme, vnstat, ping)
@@ -91,7 +128,68 @@ def _cached(key: str, ttl: float, producer: Callable[[], T]) -> T:
     return value
 
 
-app = FastAPI(title="Sontoloyo VPS Agent", version="1.1.0")
+app = FastAPI(title="Sontoloyo VPS Agent", version="1.2.0")
+
+# CORS — required so the dashboard's public homepage can call
+# /health, /api/probe/download, /api/probe/upload directly from a
+# visitor's browser (cross-origin: dashboard domain → tunnel domain).
+# Only these public endpoints are CORS-allowed; the authenticated
+# /api/* endpoints rely on the X-API-Key header which is preflight-safe.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_CORS_ORIGINS or ["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+    max_age=3600,
+)
+
+
+# ─────────── Per-IP sliding-window rate limiter for /api/probe/* ─────────
+#
+# Visitor-facing endpoints stream up to 10 MB per call so they need
+# protection against accidental refresh-loops AND deliberate abuse. The
+# limiter is purely in-memory (single-process FastAPI app) — fine for
+# our deployment topology where each VPS runs exactly one agent.
+
+_probe_buckets: dict[str, deque[float]] = {}
+_probe_buckets_lock = threading.Lock()
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP for rate limiting.
+
+    Trusts CF-Connecting-IP first (Cloudflare Tunnel sets this), then
+    X-Forwarded-For, falling back to the socket peer. Never trusts the
+    raw header for SECURITY decisions — this is rate-limit only, where
+    spoofing the IP just makes the attacker rate-limit themselves.
+    """
+    cf = request.headers.get("cf-connecting-ip")
+    if cf:
+        return cf.strip()
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _check_probe_rate_limit(request: Request) -> None:
+    """Sliding-window allow check. Raises 429 when exceeded."""
+    ip = _client_ip(request)
+    now = time.monotonic()
+    cutoff = now - _PROBE_RATE_WINDOW
+    with _probe_buckets_lock:
+        bucket = _probe_buckets.setdefault(ip, deque())
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+        if len(bucket) >= _PROBE_RATE_LIMIT:
+            retry_after = max(1, int(bucket[0] + _PROBE_RATE_WINDOW - now))
+            raise HTTPException(
+                status_code=429,
+                detail="probe rate limit exceeded",
+                headers={"Retry-After": str(retry_after)},
+            )
+        bucket.append(now)
+
 
 # Prime the per-process CPU sampler so the first request that lands on
 # `psutil.cpu_percent(interval=None)` gets a real value instead of 0.0.
@@ -631,6 +729,68 @@ def traffic(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
 def online(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
     _check_key(x_api_key)
     return {"ssh": _ssh_online(), "xray": _xray_online()}
+
+
+# ─────────────── Public probe endpoints (CORS, rate-limited) ─────────────
+#
+# These are designed to be called directly from a visitor's browser by
+# the LivePing / LiveSpeed components on the public homepage. NO API key
+# is required (we can't ship the key to a public browser), but the
+# bandwidth is bounded by:
+#   * _PROBE_MAX_BYTES (default 10 MB per request)
+#   * _PROBE_RATE_LIMIT requests per _PROBE_RATE_WINDOW seconds per IP
+#
+# Cost projection — 200 visitor/day × 40% running speedtest × 2 MB
+# download + 1 MB upload = ~240 MB/day per server. Well below any
+# reasonable VPS bandwidth allowance.
+
+
+def _random_chunks(n_bytes: int, chunk_size: int = 65536):
+    """Generator that yields ``n_bytes`` of cryptographic random bytes.
+
+    Streamed (not buffered) so we never allocate >64 KiB at once even
+    when serving the full 10 MB cap. Random data prevents Cloudflare /
+    intermediary caches from compressing the response — important for
+    an honest speed measurement.
+    """
+    remaining = n_bytes
+    while remaining > 0:
+        take = min(chunk_size, remaining)
+        yield secrets.token_bytes(take)
+        remaining -= take
+
+
+@app.get("/api/probe/download")
+def probe_download(request: Request, bytes: int = 1_000_000):
+    """Stream ``bytes`` random bytes for browser-side download speedtest."""
+    _check_probe_rate_limit(request)
+    n = max(1024, min(int(bytes), _PROBE_MAX_BYTES))
+    return StreamingResponse(
+        _random_chunks(n),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Length": str(n),
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "X-Probe-Bytes": str(n),
+        },
+    )
+
+
+@app.post("/api/probe/upload")
+async def probe_upload(request: Request):
+    """Accept up to ``_PROBE_MAX_BYTES`` bytes for browser-side upload speedtest.
+
+    We don't keep the body — just measure how many bytes the client
+    successfully streamed in. The browser uses the wallclock between
+    POST start and response receipt to compute Mbps.
+    """
+    _check_probe_rate_limit(request)
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > _PROBE_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="upload too large")
+    return {"ok": True, "bytes": received}
 
 
 if __name__ == "__main__":

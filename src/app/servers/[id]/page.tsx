@@ -5,11 +5,14 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Cpu, MemoryStick, Wifi, Activity, Server, Globe } from "lucide-react";
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip } from "recharts";
+
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PublicHeader } from "@/components/PublicHeader";
-import { flagUrl, formatBytes, formatUptime, formatSpeed, slotPercent, shouldPoll } from "@/lib/utils";
+import { LivePing } from "@/components/LivePing";
+import { LiveSpeed } from "@/components/LiveSpeed";
+import { flagUrl, formatBytes, formatUptime, slotPercent, shouldPoll } from "@/lib/utils";
 import type { ServerSummary } from "@/components/ServerCard";
 
 const REFRESH_MS = Number(process.env.NEXT_PUBLIC_REFRESH_MS || 10000);
@@ -123,8 +126,22 @@ export default function PublicServerDetail() {
         <div className="grid gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-4">
           <Tile icon={Cpu}         label="CPU"   value={`${server.cpuPercent.toFixed(0)}%`} bar={server.cpuPercent} />
           <Tile icon={MemoryStick} label="RAM"   value={`${server.ramPercent.toFixed(0)}%`} bar={server.ramPercent} />
-          <Tile icon={Wifi}        label="Ping"  value={server.pingMs ? `${server.pingMs} ms` : "—"} />
-          <Tile icon={Activity}    label="Speed" value={formatSpeed(server.speedMbps, "Mb/s")} />
+          <div className="glass p-5">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs uppercase tracking-wider text-slate-400">Ping (live)</span>
+              <Wifi size={16} className="text-cyan-300" />
+            </div>
+            <div className="text-2xl font-bold">
+              <LivePing host={server.pingHost} fallback={server.pingMs} />
+            </div>
+          </div>
+          <div className="glass p-5">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs uppercase tracking-wider text-slate-400">Speed (live)</span>
+              <Activity size={16} className="text-cyan-300" />
+            </div>
+            <LiveSpeed host={server.pingHost} fallbackMbps={server.speedMbps} />
+          </div>
         </div>
 
         <div className="grid gap-3 sm:gap-4 md:grid-cols-3">

@@ -23,6 +23,27 @@ const apiUrl = z
   })
   .pipe(z.string().url().nullable().optional());
 
+/** Same hostname validator as POST /api/servers. */
+const pingHost = z
+  .string()
+  .nullable()
+  .optional()
+  .transform((v) => {
+    if (v == null) return v;
+    const t = v.trim().replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
+    return t || null;
+  })
+  .pipe(
+    z
+      .string()
+      .regex(
+        /^(?!\d+\.\d+\.\d+\.\d+$)[a-z0-9.-]+\.[a-z]{2,}$/i,
+        "pingHost must be a public hostname (not an IP)",
+      )
+      .nullable()
+      .optional(),
+  );
+
 const updateSchema = z.object({
   name: z.string().min(1).optional(),
   domain: z.string().min(1).optional(),
@@ -32,13 +53,11 @@ const updateSchema = z.object({
   provider: z.string().min(1).optional(),
   apiUrl,
   apiKey: z.string().nullable().optional(),
+  pingHost,
   enabled: z.boolean().optional(),
   refreshMs: z.number().int().min(1000).max(600000).optional(),
   maxSlot: z.number().int().min(1).max(100000).optional(),
   status: z.enum(["ONLINE", "OFFLINE", "FULL", "WARNING", "UNKNOWN"]).optional(),
-  activeUsers: z.number().int().min(0).optional(),
-  pingMs: z.number().int().min(0).optional(),
-  speedMbps: z.number().min(0).optional(),
 });
 
 export const dynamic = "force-dynamic";

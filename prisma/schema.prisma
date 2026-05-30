@@ -40,6 +40,12 @@ model Server {
   provider    String   @default("Unknown")
   apiUrl      String?
   apiKey      String?
+  /// Public-safe hostname used by browser-side ping & speedtest.
+  /// Operator sets this to the Cloudflare Tunnel subdomain (e.g.
+  /// `agent-id1.example.com`) — it WILL be visible to all visitors of
+  /// the public homepage, so it must NOT be the real VPS IP. The
+  /// private `domain` field is masked to "" by the public API.
+  pingHost    String?
   enabled     Boolean  @default(true)
   refreshMs   Int      @default(10000)
   maxSlot     Int      @default(100)
