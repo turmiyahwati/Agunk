@@ -23,7 +23,38 @@ fi
 
 echo ">> Installing system packages..."
 apt-get update -y
-apt-get install -y python3 python3-venv python3-pip iproute2 iputils-ping curl
+apt-get install -y python3 python3-venv python3-pip iproute2 iputils-ping curl ca-certificates gnupg
+
+# ─── Ookla Speedtest CLI ────────────────────────────────────────────────
+# Used by the agent to refresh the "Tested Speed" tier on the dashboard
+# once per day at the configured off-peak hour. If the install fails
+# (sanctioned region, mirror down, etc.), the agent gracefully falls
+# back to reporting only the realtime RX/TX numbers — the dashboard
+# shows "Belum diuji" for the tested tier and keeps working.
+if ! command -v speedtest >/dev/null 2>&1; then
+  echo ">> Installing Ookla Speedtest CLI..."
+  if curl -fsSL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | bash; then
+    apt-get install -y speedtest || \
+      echo ">> WARNING: speedtest install failed — agent will skip daily benchmark." >&2
+  else
+    echo ">> WARNING: could not add Ookla repo — daily speedtest will be disabled." >&2
+  fi
+fi
+
+# Pre-accept the Ookla CLI license so the scheduler can run it
+# non-interactively. Re-running this on an already-accepted host is a
+# no-op.
+if command -v speedtest >/dev/null 2>&1; then
+  speedtest --accept-license --accept-gdpr --version >/dev/null 2>&1 || true
+fi
+
+# State directory for the persisted speedtest cache. The systemd unit
+# also declares `StateDirectory=sontoloyo` which would create this on
+# first start, but we make it explicit here so a manual `speedtest`
+# invocation (operator debugging) can write its result before the
+# service has run for the first time.
+mkdir -p /var/lib/sontoloyo
+chmod 755 /var/lib/sontoloyo
 
 INSTALL_DIR=/opt/sontoloyo-agent
 mkdir -p "${INSTALL_DIR}"

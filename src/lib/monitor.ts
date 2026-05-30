@@ -17,6 +17,16 @@ export type AgentPayload = {
   rx_speed?: number;
   /** Realtime upload throughput (Mbps, 1 decimal). Agent v1.3+. */
   tx_speed?: number;
+  /** NIC link speed in Mbps (e.g. 1000 = 1 Gbps). Agent v1.4+. */
+  link_speed_mbps?: number;
+  /** Last Ookla speedtest download result (Mbps). Agent v1.4+. */
+  last_test_down_mbps?: number;
+  /** Last Ookla speedtest upload result (Mbps). Agent v1.4+. */
+  last_test_up_mbps?: number;
+  /** Last Ookla speedtest ping (ms). Agent v1.4+. */
+  last_test_ping_ms?: number;
+  /** ISO-8601 timestamp of the last speedtest. Null if never run. Agent v1.4+. */
+  last_test_at?: string | null;
   rx?: number;
   tx?: number;
   active_users?: number;
@@ -158,6 +168,24 @@ export async function syncServer(serverId: string) {
     speedMbps: combinedSpeed,
     rxSpeedMbps: rxSpeed,
     txSpeedMbps: txSpeed,
+    // ── Tier 1: NIC port capacity (static baseline) ──
+    linkSpeedMbps: online ? payload?.link_speed_mbps ?? s.linkSpeedMbps : s.linkSpeedMbps,
+    // ── Tier 2: Daily Ookla speedtest result (refreshed at 03:00 local) ──
+    // Persist whenever the agent reports it. We never overwrite with
+    // zeros from an offline agent — that would erase a perfectly good
+    // historical benchmark just because the agent hiccupped.
+    lastSpeedtestDownMbps: online
+      ? payload?.last_test_down_mbps ?? s.lastSpeedtestDownMbps
+      : s.lastSpeedtestDownMbps,
+    lastSpeedtestUpMbps: online
+      ? payload?.last_test_up_mbps ?? s.lastSpeedtestUpMbps
+      : s.lastSpeedtestUpMbps,
+    lastSpeedtestPingMs: online
+      ? payload?.last_test_ping_ms ?? s.lastSpeedtestPingMs
+      : s.lastSpeedtestPingMs,
+    lastSpeedtestAt: online && payload?.last_test_at
+      ? new Date(payload.last_test_at)
+      : s.lastSpeedtestAt,
     rxBytes: BigInt(online ? payload?.rx ?? Number(s.rxBytes) : Number(s.rxBytes)),
     txBytes: BigInt(online ? payload?.tx ?? Number(s.txBytes) : Number(s.txBytes)),
     uptimeSec: online ? payload?.uptime ?? s.uptimeSec : 0,

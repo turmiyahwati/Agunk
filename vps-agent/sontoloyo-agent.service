@@ -12,6 +12,12 @@ Restart=always
 RestartSec=3
 User=root
 
+# Persistent state directory — used by the daily Ookla speedtest
+# scheduler to cache the last result across agent restarts. systemd
+# ensures /var/lib/sontoloyo exists with mode 0755 owned by root.
+StateDirectory=sontoloyo
+StateDirectoryMode=0755
+
 # Hardening
 NoNewPrivileges=true
 ProtectSystem=full

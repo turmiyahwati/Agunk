@@ -20,34 +20,46 @@ The /health endpoint is CORS-allowed for the dashboard's public domain
 so the LivePing component in the visitor's browser can probe it for
 realtime latency measurements.
 
-JSON shape returned by /api/status (v1.3 contract):
+JSON shape returned by /api/status (v1.4 contract):
 
 {
   "ok": true,
-  "uptime": 12345,            // seconds
-  "cpu": 24.1,                // percent
-  "ram": 41.2,                // percent
-  "ping": 14,                 // ms — gateway → cloudflare → google fallback chain
-  "speed": 12.4,              // Mbps (FLOAT, 1 decimal) — combined RX+TX (legacy)
-  "rx_speed": 8.2,            // Mbps (FLOAT) — current download throughput
-  "tx_speed": 4.2,            // Mbps (FLOAT) — current upload throughput
-  "rx": 12345678,             // bytes — current month total on default-route iface
-  "tx": 87654321,             // bytes — current month total on default-route iface
-  "active_users": 27,         // active subscribers (registered, NOT expired)
+  "uptime": 12345,                      // seconds
+  "cpu": 24.1, "ram": 41.2,             // percent
+  "ping": 14,                           // ms — gateway / cloudflare fallback chain
+
+  // ── Network performance — 3-tier display strategy ──
+  "link_speed_mbps": 1000,              // NIC port capacity (kernel-reported)
+  "last_test_down_mbps": 845.6,         // Ookla speedtest, run daily off-peak
+  "last_test_up_mbps": 812.3,
+  "last_test_ping_ms": 14,
+  "last_test_at": "2026-05-31T03:00:14Z",
+  "rx_speed": 8.2, "tx_speed": 4.2,     // realtime RX/TX throughput now
+  "speed": 12.4,                        // legacy combined RX+TX (kept for v1.2)
+
+  // ── Traffic counters & accounts ──
+  "rx": 12345678, "tx": 87654321,       // bytes — current month, default-route iface
+  "active_users": 27,                   // active subscribers (registered, not expired)
   "ssh": true, "xray": true, "nginx": true, "udp": false,
   "total_ssh": 38, "total_xray": 0
 }
 
-Speed semantics:
+Speed display strategy (3 tiers):
 
-* `rx_speed` and `tx_speed` are realtime NETWORK THROUGHPUT (RX/TX byte
-  delta divided by sample interval). They reflect the traffic actually
-  flowing through the VPS RIGHT NOW — not a periodic speedtest result.
-  Idle servers will report ~0 (correct), busy servers will report the
-  current data rate. This matches the SPEED reading shown in the
-  Premium auto-installer's main menu.
-* `speed` is kept as the sum (rx_speed + tx_speed) for backward
-  compatibility with older dashboards that consumed the v1.2 contract.
+  * link_speed_mbps   = NIC port capacity (e.g. 1000 = 1 Gbps). Static, free,
+                        always-on baseline. Visible to visitors as "Port: 1 Gbps".
+  * last_test_*       = Ookla speedtest result, refreshed once per 24 hours at
+                        local time 03:00 (off-peak). The actual achievable
+                        bandwidth between this VPS and the closest Ookla node.
+                        Persisted across agent restarts in
+                        /var/lib/sontoloyo/last_speedtest.json.
+  * rx_speed / tx_speed = realtime traffic the VPS is serving RIGHT NOW.
+                          Read directly from psutil counter delta.
+
+This three-tier scheme answers three different visitor questions
+honestly: "how big is the pipe?", "what's the real-world max?", and
+"how busy is it now?". The previous single-metric approach forced one
+of those answers to substitute for all three, which was misleading.
 
 Counting policy (matches what the Premium auto-installer's main menu shows):
 
@@ -72,7 +84,7 @@ import time
 import socket
 import subprocess
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Callable, TypeVar
 
 import psutil
@@ -93,6 +105,34 @@ _CORS_ORIGINS = [
     o.strip() for o in os.environ.get("SONTOLOYO_CORS_ORIGINS", "*").split(",")
     if o.strip()
 ]
+
+# ─────── Daily Ookla speedtest scheduler ───────────────────────────────
+#
+# The agent runs `speedtest --format=json` once on startup (initial
+# benchmark) then on a fixed local-time schedule (default 03:00 daily)
+# to keep the "Tested Speed" tier in the dashboard fresh without
+# disturbing customers during peak hours. The result is persisted to
+# disk so it survives agent restarts and so /api/status always has a
+# value to return — even on the very first request after a fresh
+# install (returns zeros until the initial benchmark completes ~30s
+# later).
+#
+# Tunables (override via environment file):
+#   SONTOLOYO_SPEEDTEST_HOUR     = local hour-of-day to run, 0-23
+#   SONTOLOYO_SPEEDTEST_INTERVAL = hours between runs
+#   SONTOLOYO_SPEEDTEST_CACHE    = persistence path
+#   SONTOLOYO_SPEEDTEST_DISABLE  = set to "1" to skip benchmarking entirely
+_SPEEDTEST_HOUR = int(os.environ.get("SONTOLOYO_SPEEDTEST_HOUR", "3"))
+_SPEEDTEST_INTERVAL_HOURS = int(os.environ.get("SONTOLOYO_SPEEDTEST_INTERVAL", "24"))
+_SPEEDTEST_CACHE = os.environ.get(
+    "SONTOLOYO_SPEEDTEST_CACHE", "/var/lib/sontoloyo/last_speedtest.json"
+)
+_SPEEDTEST_DISABLED = os.environ.get("SONTOLOYO_SPEEDTEST_DISABLE", "") == "1"
+# Maximum subprocess wallclock — Ookla typically finishes in 30-60 s,
+# but slow connections or stuck servers warrant a generous cap.
+_SPEEDTEST_TIMEOUT_S = int(os.environ.get("SONTOLOYO_SPEEDTEST_TIMEOUT", "300"))
+
+_speedtest_lock = threading.Lock()
 
 # Per-call result cache (TTL seconds). Lets us make /api/status return in
 # milliseconds even though the underlying probes (cek-vme, vnstat, ping)
@@ -121,7 +161,7 @@ def _cached(key: str, ttl: float, producer: Callable[[], T]) -> T:
     return value
 
 
-app = FastAPI(title="Sontoloyo VPS Agent", version="1.3.0")
+app = FastAPI(title="Sontoloyo VPS Agent", version="1.4.0")
 
 # CORS — required so the dashboard's public homepage can call /health
 # directly from a visitor's browser (cross-origin: dashboard domain →
@@ -140,6 +180,19 @@ app.add_middleware(
 # Prime the per-process CPU sampler so the first request that lands on
 # `psutil.cpu_percent(interval=None)` gets a real value instead of 0.0.
 psutil.cpu_percent(interval=None)
+
+
+# Kick off the daily Ookla speedtest scheduler in a daemon thread. It
+# runs an initial benchmark on startup (if no cache exists) and then
+# sleeps until the next scheduled local-time hour. ``daemon=True`` so
+# the thread dies cleanly with the agent process — no zombie threads
+# on systemctl restart.
+if not _SPEEDTEST_DISABLED:
+    threading.Thread(
+        target=_speedtest_scheduler_loop,
+        name="speedtest-scheduler",
+        daemon=True,
+    ).start()
 
 
 # ─────────────────────────── helpers ──────────────────────────────────────
@@ -290,6 +343,39 @@ def _throughput_split_mbps() -> tuple[float, float]:
 def _net_rx_tx() -> tuple[int, int]:
     n = psutil.net_io_counters()
     return int(n.bytes_recv), int(n.bytes_sent)
+
+
+def _nic_link_speed_mbps() -> int:
+    """Return the kernel-reported NIC link speed for the default-route
+    interface, in Mbps. ``0`` means "unknown" — typical for LXC / Docker
+    veth interfaces and for some virtualized NICs that do not expose the
+    field. The dashboard renders ``0`` as "—" so this is safe to report
+    as-is.
+
+    Why this matters: visitors of a VPN landing page want to know "how
+    big is the pipe?", and the kernel link speed is the cheapest, most
+    truthful answer (as opposed to running a synthetic Ookla test every
+    page load). For 1 Gbps NICs this returns ``1000``, for 10 Gbps NICs
+    ``10000``, etc. The dashboard formats it to "1 Gbps" / "10 Gbps"
+    via ``formatLinkSpeed`` on the frontend.
+    """
+    iface_pref = _default_route_iface()
+    try:
+        stats = psutil.net_if_stats()
+    except Exception:
+        return 0
+    if iface_pref and iface_pref in stats:
+        sp = stats[iface_pref].speed
+        if sp and sp > 0:
+            return int(sp)
+    # Fallback: first non-loopback interface that reports a positive
+    # speed. Handles oddly named NICs without a default route entry.
+    for name, st in stats.items():
+        if name == "lo" or name.startswith("docker") or name.startswith("veth"):
+            continue
+        if st.speed and st.speed > 0:
+            return int(st.speed)
+    return 0
 
 
 def _default_route_iface() -> Optional[str]:
@@ -613,6 +699,190 @@ def status_endpoint(x_api_key: Optional[str] = Header(default=None, alias="X-API
     return _cached("status", _CACHE_TTL, _build_status_payload)
 
 
+# ─────── Speedtest cache I/O ───────────────────────────────────────────
+
+
+def _read_speedtest_cache() -> dict:
+    """Return the latest persisted Ookla speedtest result.
+
+    Schema written by ``_run_speedtest()``:
+        {"ts": "<ISO-8601 UTC>", "down_mbps": 845.6, "up_mbps": 812.3,
+         "ping_ms": 14, "server_name": "PT Telkom", "server_id": "12345"}
+
+    Missing or unreadable file → all zeros / null timestamp, which the
+    dashboard renders as "Belum diuji" without any error indication.
+    """
+    empty = {
+        "ts": None,
+        "down_mbps": 0.0,
+        "up_mbps": 0.0,
+        "ping_ms": 0,
+        "server_name": "",
+        "server_id": "",
+    }
+    if not os.path.isfile(_SPEEDTEST_CACHE):
+        return empty
+    try:
+        with open(_SPEEDTEST_CACHE) as fp:
+            data = json.load(fp)
+    except Exception:
+        return empty
+    # Defensive: legacy / partial files miss fields; backfill from `empty`.
+    return {**empty, **data}
+
+
+def _run_speedtest() -> Optional[dict]:
+    """Invoke the Ookla speedtest CLI once and persist the result.
+
+    Holds ``_speedtest_lock`` for the entire run so concurrent invocations
+    (scheduler tick lining up with operator manual trigger) do not
+    overlap and double-tax the network. On any failure (CLI missing,
+    timeout, bad JSON) we log to stderr and leave the existing cache
+    file untouched — the dashboard keeps showing the last known good
+    value rather than zeroing out on a transient hiccup.
+
+    Returns the new result dict on success, or ``None`` on failure.
+    """
+    if _SPEEDTEST_DISABLED:
+        return None
+    if not _speedtest_lock.acquire(blocking=False):
+        # Another invocation is already running; let it finish and skip.
+        return None
+    try:
+        try:
+            out = subprocess.check_output(
+                [
+                    "speedtest",
+                    "--format=json",
+                    "--accept-license",
+                    "--accept-gdpr",
+                ],
+                text=True,
+                timeout=_SPEEDTEST_TIMEOUT_S,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            print(
+                "[speedtest] Ookla CLI not installed — re-run install.sh "
+                "to add 'speedtest' package, or set SONTOLOYO_SPEEDTEST_DISABLE=1.",
+                flush=True,
+            )
+            return None
+        except subprocess.TimeoutExpired:
+            print(
+                f"[speedtest] timeout after {_SPEEDTEST_TIMEOUT_S}s; "
+                "keeping previous cache value.",
+                flush=True,
+            )
+            return None
+        except Exception as e:
+            print(f"[speedtest] CLI failed: {e}", flush=True)
+            return None
+
+        try:
+            payload = json.loads(out)
+        except Exception:
+            print("[speedtest] could not parse CLI JSON output.", flush=True)
+            return None
+
+        # Ookla CLI returns bandwidth in BYTES PER SECOND. Convert to Mbps:
+        #   bytes/sec * 8 / 1_000_000 = Mbps
+        try:
+            down_bps = float(payload.get("download", {}).get("bandwidth", 0))
+            up_bps = float(payload.get("upload", {}).get("bandwidth", 0))
+            ping_ms = float(payload.get("ping", {}).get("latency", 0))
+            server = payload.get("server", {}) or {}
+        except Exception:
+            print("[speedtest] unexpected CLI JSON shape.", flush=True)
+            return None
+
+        result = {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "down_mbps": round(down_bps * 8 / 1_000_000, 1),
+            "up_mbps": round(up_bps * 8 / 1_000_000, 1),
+            "ping_ms": int(round(ping_ms)),
+            "server_name": str(server.get("name", "")),
+            "server_id": str(server.get("id", "")),
+        }
+
+        # Persist atomically — write to .tmp then rename so a partial
+        # write never produces an empty file the next read would choke
+        # on.
+        try:
+            os.makedirs(os.path.dirname(_SPEEDTEST_CACHE) or ".", exist_ok=True)
+            tmp = _SPEEDTEST_CACHE + ".tmp"
+            with open(tmp, "w") as fp:
+                json.dump(result, fp)
+            os.replace(tmp, _SPEEDTEST_CACHE)
+        except Exception as e:
+            print(f"[speedtest] could not persist cache: {e}", flush=True)
+            # In-memory result still returned even if persistence failed,
+            # so the current /api/status request gets fresh data.
+
+        print(
+            f"[speedtest] OK — down {result['down_mbps']} Mbps, "
+            f"up {result['up_mbps']} Mbps, ping {result['ping_ms']} ms "
+            f"(via {result['server_name'] or '?'})",
+            flush=True,
+        )
+        return result
+    finally:
+        _speedtest_lock.release()
+
+
+def _seconds_until_next_run() -> float:
+    """Compute seconds until the next scheduled speedtest tick.
+
+    With default settings (hour=3, interval=24) this returns the time
+    until the next 03:00 in the local timezone. The agent uses the
+    machine's local time (``datetime.now()``) on purpose so operators
+    who run in WIB / WITA / WIT see the run land at the configured
+    local hour without any tzdata gymnastics.
+    """
+    now = datetime.now()
+    target = now.replace(
+        hour=_SPEEDTEST_HOUR, minute=0, second=0, microsecond=0,
+    )
+    if target <= now:
+        target += timedelta(hours=_SPEEDTEST_INTERVAL_HOURS)
+    return max(60.0, (target - now).total_seconds())
+
+
+def _speedtest_scheduler_loop() -> None:
+    """Daemon thread: run an initial speedtest if no cache exists, then
+    sleep until the next scheduled tick.
+
+    Designed to be the lowest-impact possible: we only run when the
+    operator's local time hits the configured hour (default 03:00),
+    which is the universally-acknowledged off-peak window for VPN
+    traffic. Tunable via ``SONTOLOYO_SPEEDTEST_HOUR`` and
+    ``SONTOLOYO_SPEEDTEST_INTERVAL`` so multi-region operators can
+    spread the load.
+    """
+    # Short startup delay so the network has a chance to settle and the
+    # systemd unit's "Started" log line appears before the first
+    # speedtest log line — keeps `journalctl -u sontoloyo-agent` easy
+    # to read.
+    time.sleep(15)
+
+    cached = _read_speedtest_cache()
+    if cached.get("ts") is None:
+        # No prior result on disk — run the initial benchmark now so
+        # the dashboard has SOMETHING to show within the first minute
+        # of agent uptime.
+        _run_speedtest()
+
+    while True:
+        try:
+            time.sleep(_seconds_until_next_run())
+            _run_speedtest()
+        except Exception as e:
+            # Never let a stray error kill the scheduler thread — log
+            # and try again at the next interval.
+            print(f"[speedtest] scheduler error: {e}", flush=True)
+            time.sleep(3600)
+
+
 def _build_status_payload() -> dict:
     """Heavy lifting that backs ``GET /api/status``.
 
@@ -630,6 +900,8 @@ def _build_status_payload() -> dict:
     online_ssh = _ssh_online()
     online_xray = _xray_online()
     rx_speed, tx_speed = _throughput_split_mbps()
+    link_speed = _nic_link_speed_mbps()
+    last_test = _read_speedtest_cache()
     # Non-blocking CPU read — uses the delta since the previous snapshot
     # (which the cache keeps refreshed every few seconds), so we avoid
     # the 200 ms blocking sample on the request hot path.
@@ -640,8 +912,14 @@ def _build_status_payload() -> dict:
         "cpu": cpu,
         "ram": psutil.virtual_memory().percent,
         "ping": _gateway_ping_ms(),
-        # Realtime network throughput, split per direction. These are
-        # the primary speed gauges the dashboard renders to visitors.
+        # ── Tier 1: NIC port capacity (kernel-reported, free, always-on) ──
+        "link_speed_mbps": link_speed,
+        # ── Tier 2: Last Ookla speedtest result (refreshed daily off-peak) ──
+        "last_test_down_mbps": last_test["down_mbps"],
+        "last_test_up_mbps": last_test["up_mbps"],
+        "last_test_ping_ms": last_test["ping_ms"],
+        "last_test_at": last_test["ts"],
+        # ── Tier 3: Realtime RX/TX throughput (current load) ──
         "rx_speed": rx_speed,
         "tx_speed": tx_speed,
         # Combined RX+TX kept for backward compatibility with any older
