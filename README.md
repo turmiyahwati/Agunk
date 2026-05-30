@@ -160,7 +160,7 @@ curl http://127.0.0.1:8787/health
 curl -H "X-API-Key: <key>" http://127.0.0.1:8787/api/status
 ```
 
-JSON shape returned by `/api/status` (v1.4 contract):
+JSON shape returned by `/api/status` (v1.5 contract):
 
 ```json
 {
@@ -172,6 +172,8 @@ JSON shape returned by `/api/status` (v1.4 contract):
   "last_test_ping_ms": 14, "last_test_at": "2026-05-31T03:00:14Z",
   "rx_speed": 8.2, "tx_speed": 4.2, "speed": 12.4,
   "rx": 12345678, "tx": 87654321,
+  "rx_today": 5432109, "tx_today": 3210987,
+  "rx_boot":  2345678, "tx_boot":  1234567,
   "active_users": 27,
   "ssh": true, "xray": true, "nginx": true, "udp": false,
   "total_ssh": 38, "total_xray": 0
@@ -184,11 +186,21 @@ Three speed tiers, three honest answers:
 - `last_test_*` → "what's the real-world max?" (Ookla, daily off-peak)
 - `rx_speed` / `tx_speed` → "how busy is it now?" (psutil delta)
 
+Three traffic windows, side-by-side on the dashboard:
+
+- `rx` / `tx` → current calendar month (vnstat month bucket)
+- `rx_today` / `tx_today` → today's calendar day (vnstat day bucket)
+- `rx_boot` / `tx_boot` → since last reboot (psutil counter)
+
+The dashboard surfaces `rx_today` / `tx_today` as the prominent
+**TODAY** tile next to a `rx_boot` / `tx_boot` "since reboot" tile so
+operators see daily-billing numbers alongside the session-level
+snapshot Premium installer panels expose.
+
 `speed` is the combined sum, kept for v1.2 / v1.3 dashboards.
 
-`rx`/`tx` reflect the current calendar month on the kernel default-route
-interface (matches `vnstat -m`). `active_users` counts active subscribers
-(SSH lines with future expiry + unique Xray emails in `config.json`).
+`active_users` counts active subscribers (SSH lines with future expiry
++ unique Xray emails in `config.json`).
 
 Public endpoint (no auth, CORS-enabled): `GET /health` — small JSON
 heartbeat used by the dashboard's browser-side LivePing component for

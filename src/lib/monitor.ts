@@ -29,6 +29,14 @@ export type AgentPayload = {
   last_test_at?: string | null;
   rx?: number;
   tx?: number;
+  /** Today's RX byte counter (vnstat daily bucket). Agent v1.5+. */
+  rx_today?: number;
+  /** Today's TX byte counter (vnstat daily bucket). Agent v1.5+. */
+  tx_today?: number;
+  /** Since-reboot RX byte counter (psutil). Agent v1.5+. */
+  rx_boot?: number;
+  /** Since-reboot TX byte counter (psutil). Agent v1.5+. */
+  tx_boot?: number;
   active_users?: number;
   ssh?: boolean;
   xray?: boolean;
@@ -188,6 +196,23 @@ export async function syncServer(serverId: string) {
       : s.lastSpeedtestAt,
     rxBytes: BigInt(online ? payload?.rx ?? Number(s.rxBytes) : Number(s.rxBytes)),
     txBytes: BigInt(online ? payload?.tx ?? Number(s.txBytes) : Number(s.txBytes)),
+    // Today's bucket and since-reboot snapshot are persisted whenever
+    // the agent reports them. We never overwrite with zeros from an
+    // offline payload — that would erase the legitimate value the DB
+    // already holds and make the dashboard's TODAY tile flash to 0
+    // every time a sync fails.
+    rxBytesToday: BigInt(
+      online ? payload?.rx_today ?? Number(s.rxBytesToday) : Number(s.rxBytesToday),
+    ),
+    txBytesToday: BigInt(
+      online ? payload?.tx_today ?? Number(s.txBytesToday) : Number(s.txBytesToday),
+    ),
+    rxBytesBoot: BigInt(
+      online ? payload?.rx_boot ?? Number(s.rxBytesBoot) : Number(s.rxBytesBoot),
+    ),
+    txBytesBoot: BigInt(
+      online ? payload?.tx_boot ?? Number(s.txBytesBoot) : Number(s.txBytesBoot),
+    ),
     uptimeSec: online ? payload?.uptime ?? s.uptimeSec : 0,
     cpuPercent: online ? payload?.cpu ?? s.cpuPercent : 0,
     ramPercent: online ? payload?.ram ?? s.ramPercent : 0,
