@@ -37,13 +37,15 @@ export async function GET(req: Request) {
     select: {
       id: true, name: true, country: true, countryName: true,
       flag: true, provider: true, maxSlot: true, status: true, activeUsers: true,
-      pingMs: true, speedMbps: true, rxBytes: true, txBytes: true, uptimeSec: true,
+      pingMs: true, speedMbps: true,
+      rxSpeedMbps: true, txSpeedMbps: true,
+      rxBytes: true, txBytes: true, uptimeSec: true,
       cpuPercent: true, ramPercent: true, sshActive: true, xrayActive: true,
       nginxActive: true, udpActive: true, totalSsh: true, totalXray: true,
       lastSyncAt: true,
       // pingHost is a public Cloudflare-Tunnel hostname (operator promises
       // it does not leak the real VPS IP). It is REQUIRED by the
-      // browser-side LivePing / LiveSpeed components on the homepage.
+      // browser-side LivePing component on the homepage.
       pingHost: true,
     },
   });

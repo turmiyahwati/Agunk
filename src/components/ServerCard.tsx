@@ -3,11 +3,10 @@ import { memo } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
-import { Gauge, Users, ArrowRight } from "lucide-react";
+import { Activity, Download, Upload, Gauge, Users, ArrowRight } from "lucide-react";
 import { StatusBadge } from "./ui/StatusBadge";
 import { ProgressBar } from "./ui/ProgressBar";
 import { LivePing } from "./LivePing";
-import { LiveSpeed } from "./LiveSpeed";
 import { flagUrl, slotPercent, formatBytes, formatUptime } from "@/lib/utils";
 
 export type ServerSummary = {
@@ -27,22 +26,41 @@ export type ServerSummary = {
   status: "ONLINE" | "OFFLINE" | "FULL" | "WARNING" | "UNKNOWN";
   activeUsers: number;
   pingMs: number;
+  /** Combined RX+TX Mbps (legacy v1.2 — kept for backward compatibility). */
   speedMbps: number;
+  /** Download throughput in Mbps — realtime traffic flowing INTO the VPS. */
+  rxSpeedMbps?: number;
+  /** Upload throughput in Mbps — realtime traffic flowing OUT of the VPS. */
+  txSpeedMbps?: number;
   rxBytes: number;
   txBytes: number;
   uptimeSec: number;
   cpuPercent?: number;
   ramPercent?: number;
   /**
-   * Public-safe Cloudflare-Tunnel hostname for browser-side LivePing /
-   * LiveSpeed. Operator sets this in admin → Servers. Optional — when
-   * absent the card falls back to server-reported numbers.
+   * Public-safe Cloudflare-Tunnel hostname for browser-side LivePing.
+   * Operator sets this in admin → Servers. Optional — when absent the
+   * card falls back to the server-reported pingMs.
    */
   pingHost?: string | null;
 };
 
+/**
+ * Render a Mbps reading with sensible precision.
+ *   < 1   → "0.x"
+ *   < 10  → "X.Y"
+ *   >= 10 → "NN"
+ */
+function fmtMbps(mbps: number | null | undefined): string {
+  if (mbps == null || !isFinite(mbps) || mbps <= 0) return "0";
+  if (mbps < 10) return mbps.toFixed(1);
+  return Math.round(mbps).toString();
+}
+
 function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string }) {
   const pct = slotPercent(server.activeUsers, server.maxSlot);
+  const rx = server.rxSpeedMbps ?? 0;
+  const tx = server.txSpeedMbps ?? 0;
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
@@ -63,9 +81,12 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
         <StatusBadge status={server.status} />
       </div>
 
-      {/* Live ping + uptime. The ping number updates every 2.5s straight from
-          the visitor's browser when `pingHost` is configured — that's the
-          "true realtime" gauge that customers can trust. */}
+      {/*
+        Live ping (browser-side, updates every 2.5 s) + uptime. The ping is
+        measured from the visitor's browser via the Cloudflare Tunnel
+        hostname, so the displayed number reflects edge-to-server latency
+        (NOT the direct visitor-to-VPS ping for a future VPN connection).
+      */}
       <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
         <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2">
           <div className="mb-0.5 text-[10px] uppercase tracking-wider text-slate-500">
@@ -74,6 +95,7 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
           <div className="text-sm">
             <LivePing host={server.pingHost} fallback={server.pingMs} />
           </div>
+          <div className="mt-0.5 text-[9px] text-slate-600">via Cloudflare edge</div>
         </div>
         <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2">
           <div className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
@@ -83,11 +105,29 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
         </div>
       </div>
 
-      {/* Speedtest measured live from the visitor's browser. Auto-runs
-          once when this card scrolls into view; falls back gracefully
-          when the browser blocks cross-origin probes. */}
-      <div className="mt-3">
-        <LiveSpeed host={server.pingHost} fallbackMbps={server.speedMbps} />
+      {/*
+        Realtime network throughput, split per direction. These are TRUE
+        bytes-per-second readings from the VPS network counter — not a
+        periodic speedtest. An idle server reports ~0; a busy server
+        reports the current data rate. Same number you'd see in the
+        Premium auto-installer's main menu SPEED line.
+      */}
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+        <div className="rounded-lg border border-cyan-400/15 bg-cyan-400/5 p-2">
+          <div className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-cyan-300/80">
+            <Download size={11} /> Download
+          </div>
+          <div className="font-mono text-sm text-slate-100">{fmtMbps(rx)} Mbps</div>
+        </div>
+        <div className="rounded-lg border border-fuchsia-400/15 bg-fuchsia-400/5 p-2">
+          <div className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-fuchsia-300/80">
+            <Upload size={11} /> Upload
+          </div>
+          <div className="font-mono text-sm text-slate-100">{fmtMbps(tx)} Mbps</div>
+        </div>
+        <div className="col-span-2 -mt-1 inline-flex items-center gap-1 text-[9px] text-slate-600">
+          <Activity size={9} /> Realtime traffic dari VPS
+        </div>
       </div>
 
       <div className="mt-4">

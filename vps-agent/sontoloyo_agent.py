@@ -16,20 +16,11 @@ HTTP API:
     GET  /api/traffic                  requires X-API-Key header
     GET  /api/online                   requires X-API-Key header
 
-    GET  /api/probe/download?bytes=N   public, no auth — streams N bytes
-                                       (max 10 MB) for browser-side
-                                       download speedtest from visitors
-                                       on the public homepage
-    POST /api/probe/upload             public, no auth — accepts up to
-                                       10 MB body for upload speedtest;
-                                       returns the byte count back
+The /health endpoint is CORS-allowed for the dashboard's public domain
+so the LivePing component in the visitor's browser can probe it for
+realtime latency measurements.
 
-The /api/probe/* endpoints are CORS-allowed for the dashboard's public
-domain so the LivePing / LiveSpeed components in the visitor's browser
-can call them directly. They are rate-limited per source IP to prevent
-bandwidth abuse — typical homepage traffic stays well within the limit.
-
-JSON shape returned by /api/status:
+JSON shape returned by /api/status (v1.3 contract):
 
 {
   "ok": true,
@@ -37,13 +28,26 @@ JSON shape returned by /api/status:
   "cpu": 24.1,                // percent
   "ram": 41.2,                // percent
   "ping": 14,                 // ms — gateway → cloudflare → google fallback chain
-  "speed": 0.6,               // Mbps (FLOAT, 1 decimal) — live RX+TX throughput
+  "speed": 12.4,              // Mbps (FLOAT, 1 decimal) — combined RX+TX (legacy)
+  "rx_speed": 8.2,            // Mbps (FLOAT) — current download throughput
+  "tx_speed": 4.2,            // Mbps (FLOAT) — current upload throughput
   "rx": 12345678,             // bytes — current month total on default-route iface
   "tx": 87654321,             // bytes — current month total on default-route iface
   "active_users": 27,         // active subscribers (registered, NOT expired)
   "ssh": true, "xray": true, "nginx": true, "udp": false,
   "total_ssh": 38, "total_xray": 0
 }
+
+Speed semantics:
+
+* `rx_speed` and `tx_speed` are realtime NETWORK THROUGHPUT (RX/TX byte
+  delta divided by sample interval). They reflect the traffic actually
+  flowing through the VPS RIGHT NOW — not a periodic speedtest result.
+  Idle servers will report ~0 (correct), busy servers will report the
+  current data rate. This matches the SPEED reading shown in the
+  Premium auto-installer's main menu.
+* `speed` is kept as the sum (rx_speed + tx_speed) for backward
+  compatibility with older dashboards that consumed the v1.2 contract.
 
 Counting policy (matches what the Premium auto-installer's main menu shows):
 
@@ -61,45 +65,34 @@ Counting policy (matches what the Premium auto-installer's main menu shows):
 """
 from __future__ import annotations
 
-import math
 import os
 import re
 import json
 import time
 import socket
 import subprocess
-import secrets
 import threading
-from collections import deque
 from datetime import datetime
 from typing import Optional, Callable, TypeVar
 
 import psutil
-from fastapi import FastAPI, Header, HTTPException, Request, status
+from fastapi import FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 
 API_KEY = os.environ.get("SONTOLOYO_API_KEY", "change-me")
 HOST = os.environ.get("SONTOLOYO_HOST", "0.0.0.0")
 PORT = int(os.environ.get("SONTOLOYO_PORT", "8787"))
 
-# CORS allowlist for the public probe endpoints. The dashboard's public
-# domain is the only origin that legitimately calls /api/probe/* from a
-# visitor's browser. Operators can override via SONTOLOYO_CORS_ORIGINS
-# (comma-separated list) when running multiple dashboards or staging.
-# Default "*" lets any dashboard work out-of-the-box; tighten in
-# production by exporting SONTOLOYO_CORS_ORIGINS=https://monitoring.example.com
+# CORS allowlist for the /health endpoint (used by browser-side LivePing
+# on the dashboard's public homepage). Only that one endpoint is reached
+# from a cross-origin browser context. Tighten in production by exporting
+# SONTOLOYO_CORS_ORIGINS=https://monitoring.example.com (comma-separated
+# for multiple dashboards). Default "*" lets any dashboard work out of
+# the box.
 _CORS_ORIGINS = [
     o.strip() for o in os.environ.get("SONTOLOYO_CORS_ORIGINS", "*").split(",")
     if o.strip()
 ]
-
-# Public probe endpoint sizing & rate limiting. Defaults are conservative
-# enough for a small homepage but generous enough that one visitor with
-# 6 server cards on screen can refresh once each per minute.
-_PROBE_MAX_BYTES = int(os.environ.get("SONTOLOYO_PROBE_MAX_BYTES", str(10 * 1024 * 1024)))
-_PROBE_RATE_LIMIT = int(os.environ.get("SONTOLOYO_PROBE_RATE_LIMIT", "12"))
-_PROBE_RATE_WINDOW = float(os.environ.get("SONTOLOYO_PROBE_RATE_WINDOW", "60"))
 
 # Per-call result cache (TTL seconds). Lets us make /api/status return in
 # milliseconds even though the underlying probes (cek-vme, vnstat, ping)
@@ -128,67 +121,20 @@ def _cached(key: str, ttl: float, producer: Callable[[], T]) -> T:
     return value
 
 
-app = FastAPI(title="Sontoloyo VPS Agent", version="1.2.0")
+app = FastAPI(title="Sontoloyo VPS Agent", version="1.3.0")
 
-# CORS — required so the dashboard's public homepage can call
-# /health, /api/probe/download, /api/probe/upload directly from a
-# visitor's browser (cross-origin: dashboard domain → tunnel domain).
-# Only these public endpoints are CORS-allowed; the authenticated
-# /api/* endpoints rely on the X-API-Key header which is preflight-safe.
+# CORS — required so the dashboard's public homepage can call /health
+# directly from a visitor's browser (cross-origin: dashboard domain →
+# tunnel domain). Only the public endpoints (`/health`) are CORS-allowed;
+# the authenticated /api/* endpoints rely on the X-API-Key header which
+# is preflight-safe.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS or ["*"],
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "OPTIONS"],
     allow_headers=["*"],
     max_age=3600,
 )
-
-
-# ─────────── Per-IP sliding-window rate limiter for /api/probe/* ─────────
-#
-# Visitor-facing endpoints stream up to 10 MB per call so they need
-# protection against accidental refresh-loops AND deliberate abuse. The
-# limiter is purely in-memory (single-process FastAPI app) — fine for
-# our deployment topology where each VPS runs exactly one agent.
-
-_probe_buckets: dict[str, deque[float]] = {}
-_probe_buckets_lock = threading.Lock()
-
-
-def _client_ip(request: Request) -> str:
-    """Best-effort client IP for rate limiting.
-
-    Trusts CF-Connecting-IP first (Cloudflare Tunnel sets this), then
-    X-Forwarded-For, falling back to the socket peer. Never trusts the
-    raw header for SECURITY decisions — this is rate-limit only, where
-    spoofing the IP just makes the attacker rate-limit themselves.
-    """
-    cf = request.headers.get("cf-connecting-ip")
-    if cf:
-        return cf.strip()
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
-
-
-def _check_probe_rate_limit(request: Request) -> None:
-    """Sliding-window allow check. Raises 429 when exceeded."""
-    ip = _client_ip(request)
-    now = time.monotonic()
-    cutoff = now - _PROBE_RATE_WINDOW
-    with _probe_buckets_lock:
-        bucket = _probe_buckets.setdefault(ip, deque())
-        while bucket and bucket[0] < cutoff:
-            bucket.popleft()
-        if len(bucket) >= _PROBE_RATE_LIMIT:
-            retry_after = max(1, int(bucket[0] + _PROBE_RATE_WINDOW - now))
-            raise HTTPException(
-                status_code=429,
-                detail="probe rate limit exceeded",
-                headers={"Retry-After": str(retry_after)},
-            )
-        bucket.append(now)
 
 
 # Prime the per-process CPU sampler so the first request that lands on
@@ -297,18 +243,26 @@ _last_net_sample: dict[str, float] = {"rx": 0.0, "tx": 0.0, "ts": 0.0}
 _last_net_lock = threading.Lock()
 
 
-def _throughput_mbps() -> float:
-    """Live network throughput in Mbps (RX + TX combined), as a 1-decimal float.
+def _throughput_split_mbps() -> tuple[float, float]:
+    """Live network throughput, split into RX (download) and TX (upload).
 
-    Uses the byte counters from psutil and returns the delta-per-second
-    as Mbps. The first call has no baseline so it returns 0; subsequent
+    Returns ``(rx_mbps, tx_mbps)`` — both rounded to 1 decimal — measured
+    as the byte delta over the elapsed time since the previous call. The
+    first call has no baseline so it returns ``(0.0, 0.0)``; subsequent
     calls (every cache TTL ≈ 3 s) report the average throughput observed
     over the interval.
 
-    Returns float (e.g. 0.4 Mbps) instead of int — the previous int()
-    truncation made every traffic level below 1 Mbps display as 0 on
-    the dashboard, even when there was clearly real traffic moving
-    (vnstat would show 1.6 Mbit/s avg while the dashboard showed empty).
+    Why split? VPN dashboards routinely render Download and Upload as
+    separate gauges so visitors can see asymmetric usage at a glance.
+    The previous combined-throughput number forced operators to display
+    only a single ambiguous metric, which is much less useful for a
+    realtime monitoring panel.
+
+    The returned values are TRUE network throughput — bytes flowing
+    through the kernel network counter — not a periodic speedtest. An
+    idle server reports ~0 (correct), a busy server reports the current
+    rate. This matches the SPEED reading in the Premium auto-installer
+    main menu.
     """
     n = psutil.net_io_counters()
     now = time.time()
@@ -323,16 +277,14 @@ def _throughput_mbps() -> float:
 
     if prev_ts == 0:
         # First sample of the process lifetime — no delta to report yet.
-        return 0.0
+        return 0.0, 0.0
     dt = now - prev_ts
     if dt < 0.5:
-        return 0.0
-    delta_bytes = max(0.0, (rx - prev_rx) + (tx - prev_tx))
-    bits_per_sec = delta_bytes * 8.0 / dt
-    mbps = bits_per_sec / 1_000_000
-    # Round to 1 decimal — matches the "X.Y Mbit/s" granularity vnstat
-    # uses in its monthly reports, plenty of precision for a UI gauge.
-    return round(mbps, 1)
+        return 0.0, 0.0
+
+    rx_mbps = max(0.0, (rx - prev_rx)) * 8.0 / dt / 1_000_000
+    tx_mbps = max(0.0, (tx - prev_tx)) * 8.0 / dt / 1_000_000
+    return round(rx_mbps, 1), round(tx_mbps, 1)
 
 
 def _net_rx_tx() -> tuple[int, int]:
@@ -677,6 +629,7 @@ def _build_status_payload() -> dict:
     active_xray = _active_xray_accounts()
     online_ssh = _ssh_online()
     online_xray = _xray_online()
+    rx_speed, tx_speed = _throughput_split_mbps()
     # Non-blocking CPU read — uses the delta since the previous snapshot
     # (which the cache keeps refreshed every few seconds), so we avoid
     # the 200 ms blocking sample on the request hot path.
@@ -687,10 +640,13 @@ def _build_status_payload() -> dict:
         "cpu": cpu,
         "ram": psutil.virtual_memory().percent,
         "ping": _gateway_ping_ms(),
-        # Live throughput (Mbps, 1 decimal) over the last cache window.
-        # Float-typed so traffic <1 Mbps shows up correctly on the
-        # dashboard instead of truncating to 0.
-        "speed": _throughput_mbps(),
+        # Realtime network throughput, split per direction. These are
+        # the primary speed gauges the dashboard renders to visitors.
+        "rx_speed": rx_speed,
+        "tx_speed": tx_speed,
+        # Combined RX+TX kept for backward compatibility with any older
+        # dashboard build that consumes the v1.2 contract.
+        "speed": round(rx_speed + tx_speed, 1),
         "rx": rx, "tx": tx,
         # Active subscribers (matches the Premium menu's ACCOUNT number).
         # Fallback to the live online count when neither DB nor config
@@ -722,75 +678,18 @@ def system(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
 def traffic(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
     _check_key(x_api_key)
     rx, tx = _vnstat_total()
-    return {"rx": rx, "tx": tx, "speed": _throughput_mbps()}
+    rx_speed, tx_speed = _throughput_split_mbps()
+    return {
+        "rx": rx, "tx": tx,
+        "rx_speed": rx_speed, "tx_speed": tx_speed,
+        "speed": round(rx_speed + tx_speed, 1),
+    }
 
 
 @app.get("/api/online")
 def online(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
     _check_key(x_api_key)
     return {"ssh": _ssh_online(), "xray": _xray_online()}
-
-
-# ─────────────── Public probe endpoints (CORS, rate-limited) ─────────────
-#
-# These are designed to be called directly from a visitor's browser by
-# the LivePing / LiveSpeed components on the public homepage. NO API key
-# is required (we can't ship the key to a public browser), but the
-# bandwidth is bounded by:
-#   * _PROBE_MAX_BYTES (default 10 MB per request)
-#   * _PROBE_RATE_LIMIT requests per _PROBE_RATE_WINDOW seconds per IP
-#
-# Cost projection — 200 visitor/day × 40% running speedtest × 2 MB
-# download + 1 MB upload = ~240 MB/day per server. Well below any
-# reasonable VPS bandwidth allowance.
-
-
-def _random_chunks(n_bytes: int, chunk_size: int = 65536):
-    """Generator that yields ``n_bytes`` of cryptographic random bytes.
-
-    Streamed (not buffered) so we never allocate >64 KiB at once even
-    when serving the full 10 MB cap. Random data prevents Cloudflare /
-    intermediary caches from compressing the response — important for
-    an honest speed measurement.
-    """
-    remaining = n_bytes
-    while remaining > 0:
-        take = min(chunk_size, remaining)
-        yield secrets.token_bytes(take)
-        remaining -= take
-
-
-@app.get("/api/probe/download")
-def probe_download(request: Request, bytes: int = 1_000_000):
-    """Stream ``bytes`` random bytes for browser-side download speedtest."""
-    _check_probe_rate_limit(request)
-    n = max(1024, min(int(bytes), _PROBE_MAX_BYTES))
-    return StreamingResponse(
-        _random_chunks(n),
-        media_type="application/octet-stream",
-        headers={
-            "Content-Length": str(n),
-            "Cache-Control": "no-store, no-cache, must-revalidate",
-            "X-Probe-Bytes": str(n),
-        },
-    )
-
-
-@app.post("/api/probe/upload")
-async def probe_upload(request: Request):
-    """Accept up to ``_PROBE_MAX_BYTES`` bytes for browser-side upload speedtest.
-
-    We don't keep the body — just measure how many bytes the client
-    successfully streamed in. The browser uses the wallclock between
-    POST start and response receipt to compute Mbps.
-    """
-    _check_probe_rate_limit(request)
-    received = 0
-    async for chunk in request.stream():
-        received += len(chunk)
-        if received > _PROBE_MAX_BYTES:
-            raise HTTPException(status_code=413, detail="upload too large")
-    return {"ok": True, "bytes": received}
 
 
 if __name__ == "__main__":

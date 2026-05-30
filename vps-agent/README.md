@@ -3,7 +3,7 @@
 Lightweight Python (FastAPI) agent that exposes server health to the
 **PT Sontoloyo Monitor** dashboard. Author: **Pakde Xresx Digital Store**.
 
-Current contract: **v1.2** (browser probe endpoints + CORS).
+Current contract: **v1.3** (split RX/TX throughput).
 
 ## What it reports
 
@@ -16,7 +16,9 @@ Current contract: **v1.2** (browser probe endpoints + CORS).
   "cpu": 24.1,
   "ram": 41.2,
   "ping": 14,
-  "speed": 0.6,
+  "speed": 12.4,
+  "rx_speed": 8.2,
+  "tx_speed": 4.2,
   "rx": 12345678,
   "tx": 87654321,
   "active_users": 27,
@@ -29,31 +31,30 @@ Current contract: **v1.2** (browser probe endpoints + CORS).
 }
 ```
 
-Field notes (changed in v1.1+):
+Field notes:
 
-- `speed` is **float (1 decimal)** — values <1 Mbps are valid (e.g. `0.4`).
-  Previous int-truncation hid every sub-Mbps reading as 0.
-- `rx`/`tx` reflect the **current calendar month** on the kernel's
-  default-route interface (matches `vnstat -m`). Previously this was
-  lifetime cumulative on `interfaces[0]`, which often picked the wrong
-  NIC on multi-tunnel hosts.
-- `active_users` counts **active subscribers only** — SSH lines in
+- `rx_speed` / `tx_speed` are realtime **network throughput** (bytes
+  per second through the kernel network counter, divided by the sample
+  interval and converted to Mbps). They reflect the traffic actually
+  flowing through the VPS RIGHT NOW — not a periodic speedtest. Idle
+  servers report ~0 (correct), busy servers report the current data
+  rate. This matches the SPEED line in the Premium auto-installer's
+  main menu.
+- `speed` is `rx_speed + tx_speed` rounded to 1 decimal — kept for
+  backward compatibility with v1.2 dashboards.
+- `rx` / `tx` are the cumulative bytes for the **current calendar
+  month** on the kernel's default-route interface (matches `vnstat -m`).
+- `active_users` counts active subscribers only — SSH lines in
   `/etc/ssh/.ssh.db` with future expiry plus Xray accounts read from
   the live `config.json`. The legacy `/etc/xray/.userall.db` log file
-  is no longer consulted.
-- The `online_now` field was removed (no consumer in the dashboard).
+  is NOT consulted.
 
 Authenticated endpoints (header `X-API-Key`): `/api/status`,
 `/api/system`, `/api/traffic`, `/api/online`.
 
-Public endpoints (no auth, CORS-enabled, rate-limited per IP):
-
-- `GET /health` — JSON heartbeat used by the dashboard's
-  browser-side **LivePing** component for live RTT measurement.
-- `GET /api/probe/download?bytes=N` — streams up to 10 MB of random
-  bytes for browser-side **download speedtest**.
-- `POST /api/probe/upload` — accepts up to 10 MB of body for
-  browser-side **upload speedtest**.
+Public endpoint (no auth, CORS-enabled): `GET /health` — small JSON
+heartbeat used by the dashboard's browser-side **LivePing** component
+for realtime latency measurement.
 
 ## Install (Debian / Ubuntu)
 
@@ -79,10 +80,6 @@ It:
 ```bash
 curl http://127.0.0.1:8787/health
 curl -H "X-API-Key: $YOUR_KEY" http://127.0.0.1:8787/api/status
-
-# probe endpoints (public, CORS-allowed)
-curl -o /dev/null http://127.0.0.1:8787/api/probe/download?bytes=2000000
-curl -X POST --data-binary @1mb.bin http://127.0.0.1:8787/api/probe/upload
 ```
 
 ## Connect to dashboard
@@ -95,27 +92,23 @@ In **Admin → Servers → Add Server**, set:
 - **API Key** → the value from `/etc/sontoloyo-agent.env`.
 - **Public Ping Host** → the public Cloudflare-Tunnel hostname (e.g.
   `agent-id1.example.com`). Visitors' browsers will probe this host
-  directly for live ping & speedtest. **Do NOT put the real VPS IP
-  here** — it would defeat the privacy of the masked `domain` field.
+  directly for live ping. **Do NOT put the real VPS IP here** — it
+  would defeat the privacy of the masked `domain` field.
 
 Then click the **Wifi** icon in the row to test, or wait for the next
 auto-sync (≤60 s).
 
-## Browser probe configuration
+## Configuration
 
-The probe endpoints are designed to be called from a visitor's browser.
 Tune via environment variables in `/etc/sontoloyo-agent.env`:
 
 | Var | Default | Purpose |
 |---|---|---|
-| `SONTOLOYO_CORS_ORIGINS` | `*` | Comma-separated allowlist for CORS. Tighten in production: `https://monitoring.example.com` |
-| `SONTOLOYO_PROBE_MAX_BYTES` | `10485760` (10 MB) | Hard cap on download/upload size |
-| `SONTOLOYO_PROBE_RATE_LIMIT` | `12` | Max probe calls per `RATE_WINDOW` per IP |
-| `SONTOLOYO_PROBE_RATE_WINDOW` | `60` (seconds) | Rate-limit window |
-
-Default lets one visitor with up to 6 server cards on screen do one
-download + one upload speedtest each per minute, while blocking
-brute-force scrapers.
+| `SONTOLOYO_API_KEY` | (auto-generated) | Bearer token required by `/api/*` endpoints |
+| `SONTOLOYO_HOST` | `0.0.0.0` | Bind address. Set to `127.0.0.1` after Cloudflare Tunnel is up. |
+| `SONTOLOYO_PORT` | `8787` | TCP port |
+| `SONTOLOYO_CACHE_TTL` | `3` | Seconds to memoize the heavy probes (cek-vme, vnstat, ping) |
+| `SONTOLOYO_CORS_ORIGINS` | `*` | Comma-separated allowlist for `/health` CORS. Tighten in production: `https://monitoring.example.com` |
 
 ## Operations
 
@@ -163,3 +156,16 @@ ground truth caused a real-world bug where the dashboard reported 41
   keeping port 8787 invisible to the internet.
 - Tighten `SONTOLOYO_CORS_ORIGINS` to only your dashboard domain in
   production.
+
+## Migration from v1.2
+
+If your dashboard already runs v1.2 of the agent:
+
+1. `git pull` the latest agent code.
+2. Re-run `bash install.sh` (idempotent — keeps your existing API key).
+3. The new payload includes `rx_speed` and `tx_speed`. Older
+   dashboards that only read `speed` continue to work because the
+   agent still sends that field (sum of rx + tx).
+4. If your dashboard is also upgraded, run `npx prisma db push` on it
+   to add the new `rxSpeedMbps` / `txSpeedMbps` columns. The migration
+   is non-destructive.
