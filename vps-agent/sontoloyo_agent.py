@@ -182,12 +182,20 @@ app.add_middleware(
 psutil.cpu_percent(interval=None)
 
 
-# Kick off the daily Ookla speedtest scheduler in a daemon thread. It
-# runs an initial benchmark on startup (if no cache exists) and then
-# sleeps until the next scheduled local-time hour. ``daemon=True`` so
-# the thread dies cleanly with the agent process — no zombie threads
-# on systemctl restart.
-if not _SPEEDTEST_DISABLED:
+# Spin up the daily Ookla speedtest scheduler in a daemon thread WHEN the
+# FastAPI app starts up. Using the startup event (rather than a bare
+# `threading.Thread(...).start()` at module import) guarantees that all
+# helper functions referenced by the scheduler — `_speedtest_scheduler_loop`,
+# `_run_speedtest`, `_read_speedtest_cache`, etc. — are already defined by
+# the time the loop tries to call them. The earlier import-time approach
+# crashed at startup with `NameError: name '_speedtest_scheduler_loop' is
+# not defined` because Python evaluates module bodies top-to-bottom and
+# those helpers live further down the file.
+@app.on_event("startup")
+def _start_speedtest_scheduler() -> None:
+    if _SPEEDTEST_DISABLED:
+        print("[speedtest] disabled via SONTOLOYO_SPEEDTEST_DISABLE=1", flush=True)
+        return
     threading.Thread(
         target=_speedtest_scheduler_loop,
         name="speedtest-scheduler",
