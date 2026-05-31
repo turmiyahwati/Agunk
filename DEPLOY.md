@@ -621,6 +621,11 @@ tail -3 /var/log/sontoloyo-sync.log
 
 ### 9.2. Cron backup database (jam 02:30 daily)
 
+> Sejak v1.3, instalasi via `install-dashboard.sh` otomatis menulis cron
+> harian yang memanggil `scripts/backup-all.sh` (encrypted state-bundle:
+> DB + .env + uploads + SSL + nginx config). Step ini hanya relevan
+> kalau kamu setup manual atau perlu mengubah jadwal.
+
 ```bash
 crontab -e
 ```
@@ -628,17 +633,18 @@ crontab -e
 Tambahkan:
 
 ```cron
-30 2 * * * cd /root/sontoloyo-monitor && /usr/bin/node scripts/backup-db.mjs >> /var/log/sontoloyo-backup.log 2>&1
+30 2 * * * cd /root/sontoloyo-monitor && /bin/bash scripts/backup-all.sh >> /var/log/sontoloyo-backup.log 2>&1
 ```
 
 Test manual:
 ```bash
 cd /root/sontoloyo-monitor
-node scripts/backup-db.mjs
-ls -la backups/
+bash scripts/backup-all.sh
+ls -la /root/sontoloyo-backups/
 ```
 
 Backup auto-cleanup file lebih dari 14 hari (default `BACKUP_RETENTION_DAYS=14`).
+Encryption AES-256-CBC aktif kalau `SONTOLOYO_BACKUP_PASSPHRASE` di-set di `.env`.
 
 ---
 
@@ -683,8 +689,8 @@ Browser checks:
 ```bash
 cd /root/sontoloyo-monitor
 
-# Backup dulu
-node scripts/backup-db.mjs
+# Backup dulu (full encrypted state — DB + .env + uploads + SSL + nginx)
+bash scripts/backup-all.sh
 
 # Pull + rebuild
 git fetch origin
@@ -714,13 +720,15 @@ pm2 reload sontoloyo
 
 ### 11.3. Restore database
 
+> Full disaster-recovery (database + .env + uploads + SSL + nginx) is
+> handled by `scripts/restore.sh` — see [RECOVERY.md](./RECOVERY.md) for
+> the end-to-end procedure.
+
 ```bash
 cd /root/sontoloyo-monitor
-ls backups/                             # cari snapshot terbaru
-pm2 stop sontoloyo
-cp prisma/prod.db prisma/prod.db.broken # save broken state
-cp backups/db-2026-05-29T02-30-00.db prisma/prod.db
-pm2 start sontoloyo
+ls /root/sontoloyo-backups/             # cari snapshot terbaru
+sudo bash scripts/restore.sh /root/sontoloyo-backups/sontoloyo-backup-<host>-<TS>.tar.gz.enc
+# (script will prompt for the passphrase if the archive is encrypted)
 sqlite3 prisma/prod.db "PRAGMA integrity_check;"  # ok
 ```
 

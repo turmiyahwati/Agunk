@@ -536,6 +536,13 @@ def _xray_online() -> int:
     back to a permissive ``ss`` query that covers the conventional Xray /
     HTTPS listener ports plus the local 10000-10010 inbound range used by
     haproxy → xray pipelines.
+
+    Wrapped in a 10-second TTL cache because each `cek-*` invocation
+    shells out to a compiled binary that does its own ss/ps walk and
+    can take 50-200 ms on Premium installer panels. The dashboard's
+    chart polls every 5 s and the autosync runs every 20 s, so a 10 s
+    cache stays well within "live login count freshness" while cutting
+    shell-out frequency by ~70 %.
     """
 
     def _count_cek(cmd: str) -> Optional[int]:
@@ -548,24 +555,27 @@ def _xray_online() -> int:
             return None
         return sum(1 for line in out.splitlines() if "'" in line and " - " in line)
 
-    total = 0
-    matched_any = False
-    for cmd in ("cek-vme", "cek-vle", "cek-tro"):
-        n = _count_cek(cmd)
-        if n is None:
-            continue
-        matched_any = True
-        total += n
+    def _compute() -> int:
+        total = 0
+        matched_any = False
+        for cmd in ("cek-vme", "cek-vle", "cek-tro"):
+            n = _count_cek(cmd)
+            if n is None:
+                continue
+            matched_any = True
+            total += n
 
-    if matched_any:
-        return total
+        if matched_any:
+            return total
 
-    # Generic fallback — ss-based connection count on Xray ports
-    return _count_pattern(
-        "ss -tn state established '( sport = :443 or sport = :80 or sport = :8443 "
-        "or ( sport >= :10000 and sport <= :10010 ) )' "
-        "| tail -n +2 || true"
-    )
+        # Generic fallback — ss-based connection count on Xray ports
+        return _count_pattern(
+            "ss -tn state established '( sport = :443 or sport = :80 or sport = :8443 "
+            "or ( sport >= :10000 and sport <= :10010 ) )' "
+            "| tail -n +2 || true"
+        )
+
+    return _cached("xray_online", 10.0, _compute)
 
 
 def _xray_config_paths() -> list[str]:

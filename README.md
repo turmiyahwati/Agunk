@@ -49,7 +49,7 @@ sontoloyo-monitor/
 │  │                          # AnimatedNumber, ui/*
 │  ├─ hooks/useServers.ts     # polling for /api/servers/public
 │  ├─ lib/                    # prisma, auth, guards, monitor, utils,
-│  │                          # serialize, sanitize, rate-limit, api-error
+│  │                          # serialize, rate-limit, api-error
 │  └─ middleware.ts           # gates only /admin/*
 ├─ vps-agent/                 # ──── runs on each VPN/Xray VPS ────
 │  ├─ sontoloyo_agent.py      # FastAPI app exposing /api/status
@@ -315,7 +315,7 @@ See [`.env.example`](./.env.example). Highlights:
 
 - ✅ Single-role architecture — only `ADMIN` accounts in the DB.
 - ✅ Public monitoring uses Prisma `select` whitelists (no `apiKey`/`apiUrl`/`lastError` ever sent).
-- ✅ Private/internal IPs in `domain` are masked via `lib/sanitize.ts`.
+- ✅ Private/internal IPs in domain are stripped (set to empty string) by the public /api/servers/public route — admins keep full visibility via the authenticated /api/servers endpoint.
 - ✅ NextAuth (JWT) with anti-bruteforce: 5 failed attempts per email per 60s.
 - ✅ Middleware blocks `/admin/**` for non-authenticated users.
 - ✅ Secure HTTP headers (HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, CSP).
