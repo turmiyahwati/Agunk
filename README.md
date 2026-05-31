@@ -110,6 +110,8 @@ update `DATABASE_URL`, then `npx prisma db push`.
 ## 3) Realtime sync
 
 The dashboard re-polls `/api/servers/public` every `NEXT_PUBLIC_REFRESH_MS` ms (default `10000`).
+The cadence is also editable at runtime from **Admin → Settings → Polling Interval**
+(no rebuild needed); the env var only acts as the initial default.
 Behind the scenes, that data is refreshed by the **monitor sync** job which contacts each agent.
 Run it any of these ways:
 
@@ -284,7 +286,7 @@ See [`.env.example`](./.env.example). Highlights:
 | `NEXTAUTH_URL`                   | Public URL of the dashboard                                   |
 | `ADMIN_EMAIL/PASSWORD`           | Used by `npm run db:seed` to provision the first admin        |
 | `MONITOR_SYNC_TOKEN`             | Allows external cron to call `/api/monitor/sync`              |
-| `NEXT_PUBLIC_REFRESH_MS`         | Frontend polling interval                                     |
+| `NEXT_PUBLIC_REFRESH_MS`         | Default frontend polling interval (override at runtime via Admin → Settings) |
 | `VPS_FETCH_TIMEOUT_MS`           | Per-agent fetch timeout                                       |
 | `VPS_FETCH_RETRIES`              | Retry attempts on agent timeout                               |
 | `NEXT_PUBLIC_BRAND_NAME`         | Brand name shown in header / metadata                         |
