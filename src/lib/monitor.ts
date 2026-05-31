@@ -35,12 +35,41 @@ export type AgentPayload = {
   /** Since-reboot TX byte counter (psutil). Agent v1.5+. */
   tx_boot?: number;
   active_users?: number;
+  /**
+   * Live login count (currently-connected sessions). Sum of established
+   * SSH sessions + active vmess/vless/trojan connections. Distinct from
+   * `active_users` which is the registered-subscriber total. Agent v1.7+.
+   */
+  active_logins?: number;
   ssh?: boolean;
   xray?: boolean;
   nginx?: boolean;
   udp?: boolean;
   total_ssh?: number;
   total_xray?: number;
+  /**
+   * Recent CREATE events detected by the agent's file watcher (new
+   * SSH lines in `/etc/ssh/.ssh.db`, new email entries in xray
+   * config.json). Agent v1.7+. The agent buffers events in-memory
+   * between polls and clears the buffer once the dashboard reads it,
+   * so each event lands in the Activity feed exactly once.
+   *
+   * The agent never sends usernames, emails, IPs, or any other PII
+   * — only the kind enum + UTC timestamp.
+   */
+  events?: AgentEvent[];
+};
+
+/**
+ * One CREATE event reported by the agent. The shape is intentionally
+ * minimal — we only persist non-sensitive metadata.
+ */
+export type AgentEvent = {
+  /** Account protocol/kind. STATUS is reserved for the dashboard's own
+   *  status-transition writes and never appears in agent payloads. */
+  kind: "SSH" | "VMESS" | "VLESS" | "TROJAN";
+  /** ISO-8601 timestamp (UTC) of when the agent observed the new entry. */
+  ts: string;
 };
 
 const TIMEOUT_MS = Number(process.env.VPS_FETCH_TIMEOUT_MS || 4000);
@@ -146,6 +175,13 @@ export async function syncServer(serverId: string) {
 
   const online = !!payload?.ok;
   const active = payload?.active_users ?? s.activeUsers;
+  // Live login count — falls back to the previous DB value when the
+  // agent does not report it (pre-v1.7 agents). Never reset to 0 from
+  // an offline payload because that would lie about reality (the
+  // chart would see "0 logins" instead of "we lost contact").
+  const logins = online
+    ? payload?.active_logins ?? s.activeLogins
+    : s.activeLogins;
   const status = deriveStatus(active, s.maxSlot, online);
 
   // Throughput resolution. v1.3+ agents send rx_speed / tx_speed split
@@ -169,6 +205,12 @@ export async function syncServer(serverId: string) {
   const data = {
     status,
     activeUsers: online ? active : 0,
+    // `activeLogins` semantically means "people currently connected".
+    // When the agent is unreachable that count is unknown — we keep
+    // the last known value so the chart line continues smoothly
+    // instead of dropping to 0 and creating a fake "everyone logged
+    // out" event in the visual history.
+    activeLogins: logins,
     speedMbps: combinedSpeed,
     rxSpeedMbps: rxSpeed,
     txSpeedMbps: txSpeed,
@@ -252,6 +294,7 @@ export async function syncServer(serverId: string) {
         serverId: s.id,
         status: data.status,
         activeUsers: data.activeUsers,
+        activeLogins: data.activeLogins,
         speedMbps: data.speedMbps,
         rxSpeedMbps: data.rxSpeedMbps,
         txSpeedMbps: data.txSpeedMbps,
@@ -262,6 +305,46 @@ export async function syncServer(serverId: string) {
       },
     })
     .catch(() => {});
+
+  // Account-creation events from the agent's file watcher.
+  //
+  // The agent's watcher diffs `/etc/ssh/.ssh.db` and the xray config
+  // every ~5 s and buffers any new entries it sees as one of:
+  //
+  //   { kind: "SSH"|"VMESS"|"VLESS"|"TROJAN", ts: "<ISO-8601 UTC>" }
+  //
+  // Each entry becomes an Activity row with action="CREATE" and the
+  // server's display name. We deliberately do NOT trust the kind
+  // string — only the four documented enum values are accepted, any
+  // other label is dropped. This isolates the dashboard from a
+  // compromised agent that might try to inject arbitrary strings
+  // into the public feed.
+  if (online && Array.isArray(payload?.events) && payload.events.length > 0) {
+    const ALLOWED = new Set(["SSH", "VMESS", "VLESS", "TROJAN"]);
+    for (const ev of payload.events) {
+      if (!ev || typeof ev !== "object") continue;
+      const kind = String((ev as AgentEvent).kind || "").toUpperCase();
+      if (!ALLOWED.has(kind)) continue;
+      const tsRaw = (ev as AgentEvent).ts;
+      const createdAt = tsRaw ? new Date(tsRaw) : new Date();
+      // Defensive: drop events whose timestamp is unparseable, in the
+      // future, or absurdly old (>24h). Keeps the feed honest.
+      if (Number.isNaN(createdAt.getTime())) continue;
+      const skewMs = createdAt.getTime() - Date.now();
+      if (skewMs > 60_000) continue; // >1 min in the future
+      if (-skewMs > 24 * 60 * 60_000) continue; // >24h in the past
+      await prisma.activity
+        .create({
+          data: {
+            kind,
+            serverName: s.name,
+            action: "CREATE",
+            createdAt,
+          },
+        })
+        .catch(() => {});
+    }
+  }
 
   return { ok: online, error };
 }

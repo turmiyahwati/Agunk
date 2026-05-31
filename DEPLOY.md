@@ -777,14 +777,19 @@ standar.
 Override di `/etc/sontoloyo-agent.env`:
 
 ```env
-# Default: jalan tiap 24 jam jam 03:00 lokal. Bisa jarang-kan untuk hemat.
-SONTOLOYO_SPEEDTEST_INTERVAL=72   # tiap 3 hari (cut benchmark cost 67%)
+# Default: tiap 24 jam dari run terakhir. Bisa jarang/lebih sering.
+SONTOLOYO_SPEEDTEST_INTERVAL=5    # tiap 5 jam (sesuai default v1.7)
+# SONTOLOYO_SPEEDTEST_INTERVAL=72 # tiap 3 hari (cut benchmark cost 67%)
 
 # Atau matikan total — Tested tier akan tampil "Belum diuji"
 SONTOLOYO_SPEEDTEST_DISABLE=1
 
-# Off-peak hour (default 03:00 lokal). Beda kalau target di timezone lain.
-SONTOLOYO_SPEEDTEST_HOUR=2
+# Watcher CREATE event polling interval (default 5 detik). Naikkan
+# kalau khawatir disk I/O di VPS yang sibuk.
+SONTOLOYO_WATCHER_INTERVAL=5
+
+# Matikan watcher kalau tidak butuh CREATE event di Realtime Activity.
+SONTOLOYO_WATCHER_DISABLE=1
 ```
 
 Restart agent: `systemctl restart sontoloyo-agent`.

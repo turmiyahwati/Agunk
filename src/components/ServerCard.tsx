@@ -17,6 +17,7 @@ import {
 import { Area, AreaChart, ResponsiveContainer } from "recharts";
 import { StatusBadge } from "./ui/StatusBadge";
 import { ProgressBar } from "./ui/ProgressBar";
+import { AnimatedNumber } from "./ui/AnimatedNumber";
 import {
   flagUrl,
   slotPercent,
@@ -42,7 +43,20 @@ export type ServerSummary = {
   provider: string;
   maxSlot: number;
   status: "ONLINE" | "OFFLINE" | "FULL" | "WARNING" | "UNKNOWN";
+  /**
+   * Subscriber count (registered accounts not yet expired). Drives the
+   * Slot tile and WARNING/FULL thresholds. Sourced from the agent's
+   * `active_users` payload field.
+   */
   activeUsers: number;
+  /**
+   * Live login count (currently-connected sessions across SSH + Xray).
+   * Distinct from `activeUsers` above. Drives the "Users" line on the
+   * server detail chart so visitors see real-time usage rather than
+   * subscription totals. Optional for backward compat with pre-v1.7
+   * agents that didn't emit it — older agents leave it at 0.
+   */
+  activeLogins?: number;
   /** Combined RX+TX Mbps (legacy v1.2 — kept for backward compatibility). */
   speedMbps: number;
   /** Download throughput in Mbps — realtime traffic flowing INTO the VPS. */
@@ -261,7 +275,10 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
           <span className="text-slate-400 inline-flex items-center gap-1.5">
             <Users size={13} /> Slot
           </span>
-          <span className="font-mono text-slate-300">{server.activeUsers}/{server.maxSlot} ({pct}%)</span>
+          <span className="font-mono text-slate-300">
+            <AnimatedNumber value={server.activeUsers} />
+            /{server.maxSlot} (<AnimatedNumber value={pct} />%)
+          </span>
         </div>
         <ProgressBar value={pct} />
       </div>
