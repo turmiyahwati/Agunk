@@ -2,14 +2,17 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import type { ServerSummary } from "@/components/ServerCard";
 import { shouldPoll } from "@/lib/utils";
-
-const REFRESH_MS = Number(process.env.NEXT_PUBLIC_REFRESH_MS || 10000);
+import { useRuntimeConfig } from "./useRuntimeConfig";
 
 /**
  * Server list polling hook.
  *
- * - Polls /api/servers/public every `refreshMs` (default 10s) ONLY when the
- *   tab is visible — saves CPU, network and mobile battery.
+ * - Polls /api/servers/public every `refreshMs` ONLY when the tab is
+ *   visible — saves CPU, network and mobile battery.
+ * - Default cadence comes from runtime config (Admin → Settings),
+ *   falling back to NEXT_PUBLIC_REFRESH_MS, then to 10s. The hook
+ *   re-arms its interval whenever the runtime value changes so a
+ *   tweak from the Settings page propagates immediately.
  * - Refetches immediately when the user brings the tab back to focus.
  * - Cancels the in-flight request via AbortController on unmount or when
  *   a fresh fetch is initiated. This prevents the dreaded "setState on
@@ -17,7 +20,8 @@ const REFRESH_MS = Number(process.env.NEXT_PUBLIC_REFRESH_MS || 10000);
  *   previous slow response from clobbering a newer one.
  */
 export function useServers(opts?: { refreshMs?: number }) {
-  const refreshMs = opts?.refreshMs ?? REFRESH_MS;
+  const runtime = useRuntimeConfig();
+  const refreshMs = opts?.refreshMs ?? runtime.refreshMs;
   const [servers, setServers] = useState<ServerSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);

@@ -11,6 +11,7 @@ import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PublicHeader } from "@/components/PublicHeader";
 import { AnimatedNumber } from "@/components/ui/AnimatedNumber";
+import { useRuntimeConfig } from "@/hooks/useRuntimeConfig";
 import {
   flagUrl,
   formatBytes,
@@ -33,8 +34,6 @@ const LiveMetricsChart = dynamic(
   () => import("@/components/ui/LiveMetricsChart"),
   { ssr: false, loading: () => <div className="h-56" /> },
 );
-
-const REFRESH_MS = Number(process.env.NEXT_PUBLIC_REFRESH_MS || 10000);
 
 type Detail = ServerSummary & {
   cpuPercent: number; ramPercent: number;
@@ -67,6 +66,7 @@ function isDomainVisible(d: string | undefined | null): d is string {
 
 export default function PublicServerDetail() {
   const { id } = useParams<{ id: string }>();
+  const { refreshMs } = useRuntimeConfig();
   const [server, setServer] = useState<Detail | null>(null);
   const [metrics, setMetrics] = useState<MetricPoint[]>([]);
   /**
@@ -110,7 +110,7 @@ export default function PublicServerDetail() {
     load();
     const t = setInterval(() => {
       if (shouldPoll()) load();
-    }, REFRESH_MS);
+    }, refreshMs);
     const onVis = () => {
       if (typeof document !== "undefined" && !document.hidden) load();
     };
@@ -126,7 +126,7 @@ export default function PublicServerDetail() {
       inflightRef.current?.abort();
       inflightRef.current = null;
     };
-  }, [id]);
+  }, [id, refreshMs]);
 
   if (!server) {
     return (
