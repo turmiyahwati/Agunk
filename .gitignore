@@ -41,3 +41,7 @@ public/uploads/*
 
 # database backups produced by `npm run db:backup`
 backups/
+
+
+# TypeScript incremental build cache
+*.tsbuildinfo

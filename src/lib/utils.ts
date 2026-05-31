@@ -53,27 +53,6 @@ export function formatSpeed(mbps: number | null | undefined, suffix = "Mb"): str
 }
 
 /**
- * Render the kernel-reported NIC link speed as a human-friendly capacity
- * label. The agent reports the value in Mbps; we promote to Gbps once the
- * number gets unwieldy. Returns "—" when the kernel could not determine
- * the link speed (typical for LXC / Docker veth interfaces) so the
- * dashboard does not lie about a 0 Gbps pipe that does not exist.
- *
- *   0           → "—"
- *   1..999      → "100 Mbps"
- *   1000..9999  → "1 Gbps"
- *   >= 10000    → "10 Gbps"
- */
-export function formatLinkSpeed(mbps: number | null | undefined): string {
-  if (mbps == null || !isFinite(mbps) || mbps <= 0) return "—";
-  if (mbps >= 1000) {
-    const gbps = mbps / 1000;
-    return Number.isInteger(gbps) ? `${gbps} Gbps` : `${gbps.toFixed(1)} Gbps`;
-  }
-  return `${Math.round(mbps)} Mbps`;
-}
-
-/**
  * Format a Mbps reading from a periodic Ookla speedtest result.
  *
  * Distinct from `formatSpeed` which formats live throughput: for a

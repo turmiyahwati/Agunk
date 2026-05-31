@@ -9,27 +9,22 @@ Author: Pakde Xresx Digital Store
 
 HTTP API:
 
-    GET  /health                       public, no auth — used by browser
-                                       clients for live ping latency probes
+    GET  /health                       public, no auth — generic
+                                       liveness probe (used by ops scripts
+                                       and the systemd service test)
     GET  /api/status                   requires X-API-Key header
     GET  /api/system                   requires X-API-Key header
     GET  /api/traffic                  requires X-API-Key header
     GET  /api/online                   requires X-API-Key header
 
-The /health endpoint is CORS-allowed for the dashboard's public domain
-so the LivePing component in the visitor's browser can probe it for
-realtime latency measurements.
-
-JSON shape returned by /api/status (v1.5 contract):
+JSON shape returned by /api/status (v1.6 contract):
 
 {
   "ok": true,
   "uptime": 12345,                      // seconds
   "cpu": 24.1, "ram": 41.2,             // percent
-  "ping": 14,                           // ms — gateway / cloudflare fallback chain
 
-  // ── Network performance — 3-tier display strategy ──
-  "link_speed_mbps": 1000,              // NIC port capacity (kernel-reported)
+  // ── Network performance — 2-tier display strategy ──
   "last_test_down_mbps": 845.6,         // Ookla speedtest, run daily off-peak
   "last_test_up_mbps": 812.3,
   "last_test_ping_ms": 14,
@@ -48,10 +43,8 @@ JSON shape returned by /api/status (v1.5 contract):
   "total_ssh": 38, "total_xray": 0
 }
 
-Speed display strategy (3 tiers):
+Speed display strategy (2 tiers):
 
-  * link_speed_mbps   = NIC port capacity (e.g. 1000 = 1 Gbps). Static, free,
-                        always-on baseline. Visible to visitors as "Port: 1 Gbps".
   * last_test_*       = Ookla speedtest result, refreshed once per 24 hours at
                         local time 03:00 (off-peak). The actual achievable
                         bandwidth between this VPS and the closest Ookla node.
@@ -60,10 +53,11 @@ Speed display strategy (3 tiers):
   * rx_speed / tx_speed = realtime traffic the VPS is serving RIGHT NOW.
                           Read directly from psutil counter delta.
 
-This three-tier scheme answers three different visitor questions
-honestly: "how big is the pipe?", "what's the real-world max?", and
-"how busy is it now?". The previous single-metric approach forced one
-of those answers to substitute for all three, which was misleading.
+This two-tier scheme answers two different visitor questions honestly:
+"what's the real-world max?" and "how busy is it now?". A previous
+"Port Capacity" tier (kernel-reported NIC link speed) was removed
+because it returned 0 / 10 Mbps on most LXC/Docker/virtualized
+deployments and was misleading visitors more than informing them.
 
 Counting policy (matches what the Premium auto-installer's main menu shows):
 
@@ -93,22 +87,10 @@ from typing import Optional, Callable, TypeVar
 
 import psutil
 from fastapi import FastAPI, Header, HTTPException, status
-from fastapi.middleware.cors import CORSMiddleware
 
 API_KEY = os.environ.get("SONTOLOYO_API_KEY", "change-me")
 HOST = os.environ.get("SONTOLOYO_HOST", "0.0.0.0")
 PORT = int(os.environ.get("SONTOLOYO_PORT", "8787"))
-
-# CORS allowlist for the /health endpoint (used by browser-side LivePing
-# on the dashboard's public homepage). Only that one endpoint is reached
-# from a cross-origin browser context. Tighten in production by exporting
-# SONTOLOYO_CORS_ORIGINS=https://monitoring.example.com (comma-separated
-# for multiple dashboards). Default "*" lets any dashboard work out of
-# the box.
-_CORS_ORIGINS = [
-    o.strip() for o in os.environ.get("SONTOLOYO_CORS_ORIGINS", "*").split(",")
-    if o.strip()
-]
 
 # ─────── Daily Ookla speedtest scheduler ───────────────────────────────
 #
@@ -165,20 +147,7 @@ def _cached(key: str, ttl: float, producer: Callable[[], T]) -> T:
     return value
 
 
-app = FastAPI(title="Sontoloyo VPS Agent", version="1.5.0")
-
-# CORS — required so the dashboard's public homepage can call /health
-# directly from a visitor's browser (cross-origin: dashboard domain →
-# tunnel domain). Only the public endpoints (`/health`) are CORS-allowed;
-# the authenticated /api/* endpoints rely on the X-API-Key header which
-# is preflight-safe.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_CORS_ORIGINS or ["*"],
-    allow_methods=["GET", "OPTIONS"],
-    allow_headers=["*"],
-    max_age=3600,
-)
+app = FastAPI(title="Sontoloyo VPS Agent", version="1.6.0")
 
 
 # Prime the per-process CPU sampler so the first request that lands on
@@ -229,75 +198,6 @@ def _udp_active() -> bool:
         if _service_active(n):
             return True
     return False
-
-
-def _tcp_ping_ms(host: str, port: int, timeout: float = 1.5) -> Optional[int]:
-    """Measure TCP handshake time as a fallback when ICMP is blocked.
-
-    Many cheap VPS providers silently drop ALL outbound ICMP — both to
-    on-net gateways and to public resolvers like 1.1.1.1/8.8.8.8. In
-    that case a TCP connect to a well-known service (typically 443) is
-    the only practical way to obtain a latency number, since TCP/443 is
-    almost universally permitted.
-    """
-    try:
-        start = time.monotonic()
-        with socket.create_connection((host, port), timeout=timeout):
-            return int((time.monotonic() - start) * 1000)
-    except Exception:
-        return None
-
-
-def _gateway_ping_ms() -> int:
-    """Latency in ms to the first reachable upstream target.
-
-    Strategy (first non-zero wins):
-
-      1. ICMP to the default gateway — fastest when on-net.
-      2. ICMP to public resolvers (1.1.1.1, 8.8.8.8).
-      3. TCP-handshake to Cloudflare/Google over 443 / 53 — needed for
-         providers that drop all outbound ICMP. Slightly higher than
-         pure ICMP because it includes the SYN-ACK round-trip + setup,
-         but still in the same order of magnitude and stable.
-    """
-    # ICMP attempts: gateway first, then well-known public targets.
-    icmp_targets: list[str] = []
-    try:
-        gw = subprocess.check_output(
-            "ip route | awk '/default/ {print $3; exit}'",
-            shell=True, text=True, timeout=2,
-        ).strip()
-        if gw:
-            icmp_targets.append(gw)
-    except Exception:
-        pass
-    icmp_targets.extend(["1.1.1.1", "8.8.8.8"])
-
-    for target in icmp_targets:
-        try:
-            out = subprocess.check_output(
-                ["ping", "-c", "1", "-W", "1", target], text=True, timeout=3,
-            )
-            m = re.search(r"time=([\d.]+) ?ms", out)
-            if m:
-                # Floor to 1 ms for any successful reply — internal LAN
-                # gateways routinely respond in sub-millisecond range
-                # (e.g. "time=0.412 ms"). Without this floor, int()
-                # truncated those replies to 0 and the function returned
-                # immediately, skipping the public-target ICMP and TCP
-                # fallbacks below. The dashboard then showed an empty
-                # "—" card even though the host had perfectly good
-                # connectivity.
-                return max(1, int(round(float(m.group(1)))))
-        except Exception:
-            continue
-
-    # TCP fallback — when the provider firewall drops ICMP entirely.
-    for host, port in (("1.1.1.1", 443), ("8.8.8.8", 443), ("1.1.1.1", 53)):
-        v = _tcp_ping_ms(host, port)
-        if v is not None and v > 0:
-            return v
-    return 0
 
 
 # Module-level state for instantaneous-throughput computation. Each call to
@@ -355,39 +255,6 @@ def _throughput_split_mbps() -> tuple[float, float]:
 def _net_rx_tx() -> tuple[int, int]:
     n = psutil.net_io_counters()
     return int(n.bytes_recv), int(n.bytes_sent)
-
-
-def _nic_link_speed_mbps() -> int:
-    """Return the kernel-reported NIC link speed for the default-route
-    interface, in Mbps. ``0`` means "unknown" — typical for LXC / Docker
-    veth interfaces and for some virtualized NICs that do not expose the
-    field. The dashboard renders ``0`` as "—" so this is safe to report
-    as-is.
-
-    Why this matters: visitors of a VPN landing page want to know "how
-    big is the pipe?", and the kernel link speed is the cheapest, most
-    truthful answer (as opposed to running a synthetic Ookla test every
-    page load). For 1 Gbps NICs this returns ``1000``, for 10 Gbps NICs
-    ``10000``, etc. The dashboard formats it to "1 Gbps" / "10 Gbps"
-    via ``formatLinkSpeed`` on the frontend.
-    """
-    iface_pref = _default_route_iface()
-    try:
-        stats = psutil.net_if_stats()
-    except Exception:
-        return 0
-    if iface_pref and iface_pref in stats:
-        sp = stats[iface_pref].speed
-        if sp and sp > 0:
-            return int(sp)
-    # Fallback: first non-loopback interface that reports a positive
-    # speed. Handles oddly named NICs without a default route entry.
-    for name, st in stats.items():
-        if name == "lo" or name.startswith("docker") or name.startswith("veth"):
-            continue
-        if st.speed and st.speed > 0:
-            return int(st.speed)
-    return 0
 
 
 def _default_route_iface() -> Optional[str]:
@@ -955,7 +822,6 @@ def _build_status_payload() -> dict:
     online_ssh = _ssh_online()
     online_xray = _xray_online()
     rx_speed, tx_speed = _throughput_split_mbps()
-    link_speed = _nic_link_speed_mbps()
     last_test = _read_speedtest_cache()
     # Non-blocking CPU read — uses the delta since the previous snapshot
     # (which the cache keeps refreshed every few seconds), so we avoid
@@ -966,15 +832,12 @@ def _build_status_payload() -> dict:
         "uptime": int(time.time() - psutil.boot_time()),
         "cpu": cpu,
         "ram": psutil.virtual_memory().percent,
-        "ping": _gateway_ping_ms(),
-        # ── Tier 1: NIC port capacity (kernel-reported, free, always-on) ──
-        "link_speed_mbps": link_speed,
-        # ── Tier 2: Last Ookla speedtest result (refreshed daily off-peak) ──
+        # ── Tier 1: Last Ookla speedtest result (refreshed daily off-peak) ──
         "last_test_down_mbps": last_test["down_mbps"],
         "last_test_up_mbps": last_test["up_mbps"],
         "last_test_ping_ms": last_test["ping_ms"],
         "last_test_at": last_test["ts"],
-        # ── Tier 3: Realtime RX/TX throughput (current load) ──
+        # ── Tier 2: Realtime RX/TX throughput (current load) ──
         "rx_speed": rx_speed,
         "tx_speed": tx_speed,
         # Combined RX+TX kept for backward compatibility with any older

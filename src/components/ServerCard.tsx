@@ -17,13 +17,11 @@ import {
 import { Area, AreaChart, ResponsiveContainer } from "recharts";
 import { StatusBadge } from "./ui/StatusBadge";
 import { ProgressBar } from "./ui/ProgressBar";
-import { LivePing } from "./LivePing";
 import {
   flagUrl,
   slotPercent,
   formatBytes,
   formatUptime,
-  formatLinkSpeed,
   formatTestedSpeed,
   formatRelativeAge,
 } from "@/lib/utils";
@@ -45,15 +43,12 @@ export type ServerSummary = {
   maxSlot: number;
   status: "ONLINE" | "OFFLINE" | "FULL" | "WARNING" | "UNKNOWN";
   activeUsers: number;
-  pingMs: number;
   /** Combined RX+TX Mbps (legacy v1.2 — kept for backward compatibility). */
   speedMbps: number;
   /** Download throughput in Mbps — realtime traffic flowing INTO the VPS. */
   rxSpeedMbps?: number;
   /** Upload throughput in Mbps — realtime traffic flowing OUT of the VPS. */
   txSpeedMbps?: number;
-  /** NIC port capacity in Mbps (e.g. 1000 = 1 Gbps). 0 = unknown. */
-  linkSpeedMbps?: number;
   /** Latest periodic Ookla speedtest result. 0 = never tested. */
   lastSpeedtestDownMbps?: number;
   lastSpeedtestUpMbps?: number;
@@ -72,12 +67,6 @@ export type ServerSummary = {
   uptimeSec: number;
   cpuPercent?: number;
   ramPercent?: number;
-  /**
-   * Public-safe Cloudflare-Tunnel hostname for browser-side LivePing.
-   * Operator sets this in admin → Servers. Optional — when absent the
-   * card falls back to the server-reported pingMs.
-   */
-  pingHost?: string | null;
 };
 
 /**
@@ -139,7 +128,6 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
   const testedDown = server.lastSpeedtestDownMbps ?? 0;
   const testedUp = server.lastSpeedtestUpMbps ?? 0;
   const hasTested = testedDown > 0 || testedUp > 0;
-  const portLabel = formatLinkSpeed(server.linkSpeedMbps);
 
   // Rolling sparklines for the CPU / RAM tiles. The buffer is
   // populated by the parent's polling loop — every fresh
@@ -168,20 +156,14 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
       </div>
 
       {/*
-        Live ping (browser-side, updates every 2.5 s) + uptime. The ping
-        is measured from the visitor's browser via the Cloudflare Tunnel
-        hostname, so the displayed number is honest end-to-end latency
-        from the visitor's network to the agent.
+        Uptime tile. The previous "Ping (live)" tile was removed because
+        the dashboard now reports only metrics it can actually verify
+        end-to-end — operator-side ICMP/TCP ping numbers were neither
+        useful for the visitor (it measured network reachability from
+        the agent's PoV, not theirs) nor reliable across providers that
+        block ICMP on the gateway.
       */}
-      <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
-        <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2">
-          <div className="mb-0.5 text-[10px] uppercase tracking-wider text-slate-500">
-            Ping (live)
-          </div>
-          <div className="text-sm">
-            <LivePing host={server.pingHost} fallback={server.pingMs} />
-          </div>
-        </div>
+      <div className="mt-4 grid grid-cols-1 gap-3 text-xs">
         <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2">
           <div className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
             <Gauge size={11} /> Uptime
@@ -224,10 +206,15 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
       </div>
 
       {/*
-        ── 3-Tier Network Performance ────────────────────────────────────
-        Tier 1: Port Capacity   (NIC link speed, kernel — e.g. "1 Gbps")
-        Tier 2: Tested Speed    (daily Ookla benchmark)
-        Tier 3: Live Traffic    (RX/TX realtime — current load)
+        ── 2-Tier Network Performance ────────────────────────────────────
+        Tier 1: Tested Speed    (daily Ookla benchmark)
+        Tier 2: Live Traffic    (RX/TX realtime — current load)
+
+        The previous "Port Capacity" tier was removed because the
+        kernel-reported NIC link speed was unreliable in containerized
+        / virtualized deployments (LXC/Docker veth interfaces report 0
+        or 10 Mbps regardless of actual provider capacity) and was
+        misleading visitors more than it was informing them.
       */}
       <div className="mt-3 rounded-xl border border-white/5 bg-white/[0.02] p-3">
         <div className="mb-2 flex items-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
@@ -235,11 +222,6 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
         </div>
 
         <div className="space-y-1.5 text-xs">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-slate-400">Port</span>
-            <span className="font-mono text-slate-200">{portLabel}</span>
-          </div>
-
           <div className="flex items-center justify-between gap-2">
             <span className="text-slate-400">Tested</span>
             {hasTested ? (

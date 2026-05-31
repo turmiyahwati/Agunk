@@ -11,7 +11,6 @@ type Row = ServerFormValues & {
   id: string;
   status: "ONLINE" | "OFFLINE" | "FULL" | "WARNING" | "UNKNOWN";
   activeUsers: number;
-  pingMs: number;
   speedMbps: number;
   rxBytes: number;
   txBytes: number;

@@ -14,9 +14,7 @@ Current contract: **v1.5** (3-tier speed display + 3-window traffic counters).
   "ok": true,
   "uptime": 12345,
   "cpu": 24.1, "ram": 41.2,
-  "ping": 14,
 
-  "link_speed_mbps": 1000,
   "last_test_down_mbps": 845.6,
   "last_test_up_mbps": 812.3,
   "last_test_ping_ms": 14,
@@ -34,16 +32,19 @@ Current contract: **v1.5** (3-tier speed display + 3-window traffic counters).
 }
 ```
 
-### Speed display strategy (3 tiers)
+### Speed display strategy (2 tiers)
 
-The dashboard renders three honest answers to three different visitor
+The dashboard renders two honest answers to two different visitor
 questions:
 
 | Field | Question | Source | Cost |
 |---|---|---|---|
-| `link_speed_mbps` | "How big is the pipe?" | Kernel-reported NIC link speed | Free |
 | `last_test_*` | "What's the real-world max?" | Ookla CLI, run daily off-peak | ~6 GB/month per server |
 | `rx_speed` / `tx_speed` | "How busy is it now?" | psutil counter delta | Free |
+
+A third "Port Capacity" tier (kernel-reported NIC link speed) was
+removed because it returned 0 / 10 Mbps on most LXC/Docker/virtualized
+deployments and was misleading visitors more than informing them.
 
 ### Traffic counters (3 windows)
 
@@ -57,10 +58,6 @@ The dashboard renders `rx_today` / `tx_today` as the prominent
 **TODAY** tile next to a `rx_boot` / `tx_boot` "since reboot" tile so
 operators see daily-billing numbers alongside the session-level
 snapshot Premium installer panels expose in their main menu.
-
-`link_speed_mbps`: Mbps from the kernel for the default-route
-interface (`1000` = 1 Gbps NIC, `10000` = 10 Gbps). `0` means unknown
-(LXC / Docker veth) — the dashboard renders that as "—".
 
 `last_test_*`: Ookla speedtest result, refreshed once per 24 hours by
 the agent's internal scheduler at the configured local hour (default
@@ -90,9 +87,8 @@ dashboards keep working unchanged.
 Authenticated (header `X-API-Key`): `/api/status`, `/api/system`,
 `/api/traffic`, `/api/online`.
 
-Public (no auth, CORS-enabled): `GET /health` — small JSON heartbeat
-used by the dashboard's browser-side **LivePing** component for
-realtime latency measurement.
+Public (no auth): `GET /health` — small JSON heartbeat used as a
+generic liveness probe by ops scripts and the systemd service test.
 
 ## Install (Debian / Ubuntu)
 
@@ -139,10 +135,6 @@ In **Admin → Servers → Add Server**, set:
   Tunnel) or `http://YOUR_VPS_IP:8787` (direct, not recommended for
   production).
 - **API Key** → the value from `/etc/sontoloyo-agent.env`.
-- **Public Ping Host** → the public Cloudflare-Tunnel hostname (e.g.
-  `agent-id1.example.com`). Visitors' browsers will probe this host
-  directly for live ping. **Do NOT put the real VPS IP here** — it
-  would defeat the privacy of the masked `domain` field.
 
 Then click the **Wifi** icon in the row to test, or wait for the next
 auto-sync (≤60 s).
@@ -156,8 +148,7 @@ Tune via environment variables in `/etc/sontoloyo-agent.env`:
 | `SONTOLOYO_API_KEY` | (auto-generated) | Bearer token required by `/api/*` endpoints |
 | `SONTOLOYO_HOST` | `0.0.0.0` | Bind address. Set to `127.0.0.1` after Cloudflare Tunnel is up. |
 | `SONTOLOYO_PORT` | `8787` | TCP port |
-| `SONTOLOYO_CACHE_TTL` | `3` | Seconds to memoize `/api/status` (cek-vme, vnstat, ping) |
-| `SONTOLOYO_CORS_ORIGINS` | `*` | Comma-separated allowlist for `/health` CORS |
+| `SONTOLOYO_CACHE_TTL` | `3` | Seconds to memoize `/api/status` (cek-vme, vnstat) |
 | `SONTOLOYO_SPEEDTEST_HOUR` | `3` | Local hour-of-day to run the Ookla benchmark (0-23) |
 | `SONTOLOYO_SPEEDTEST_INTERVAL` | `24` | Hours between benchmark runs |
 | `SONTOLOYO_SPEEDTEST_CACHE` | `/var/lib/sontoloyo/last_speedtest.json` | Persistence path |
@@ -215,8 +206,20 @@ ground truth caused a real-world bug where the dashboard reported 41
   systemctl restart sontoloyo-agent
   ufw delete allow 8787/tcp
   ```
-- Tighten `SONTOLOYO_CORS_ORIGINS` to only your dashboard domain in
-  production.
+
+## Migration from v1.5
+
+If your dashboard already runs v1.5 of the agent:
+
+1. `git pull` the latest agent code.
+2. Re-run `bash install.sh` (idempotent — keeps your existing API key).
+3. The new payload drops the `ping` and `link_speed_mbps` fields. Older
+   v1.5 dashboards continue to work because they treat missing fields
+   as zero — the "Ping (live)" tile and "Port Capacity" tier on those
+   builds will simply render as "—".
+4. If your dashboard is also upgraded, run `npx prisma db push` on it
+   to drop the now-unused `pingMs` / `pingHost` / `linkSpeedMbps`
+   columns.
 
 ## Migration from v1.4
 

@@ -6,23 +6,38 @@ import { safeErrorMessage } from "@/lib/api-error";
 import { enforceRateLimit, PUBLIC_API_LIMIT, WRITE_LIMIT } from "@/lib/rate-limit";
 
 /**
- * Public read of recent VPN account creation events.
+ * Public read of recent activity events.
  *
- * Only safe metadata is exposed: protocol kind, server name, action,
- * and timestamp. Usernames, passwords, UUIDs, IPs, tokens, and any
- * other credential are NEVER stored in this table.
+ * Two sources populate this feed in production:
+ *   1. INTERNAL — the monitor sync layer writes a row whenever a
+ *      server's status changes (e.g. ONLINE → OFFLINE). These are
+ *      the events visitors see by default — driven by REAL probes
+ *      against each monitored VPS. See `lib/monitor.ts → syncServer`.
+ *   2. EXTERNAL — operator order systems may POST to this endpoint
+ *      after a VPN account is created. Optional integration retained
+ *      for backward compatibility.
+ *
+ * Only safe metadata is exposed: kind, server name, action, and
+ * timestamp. Usernames, passwords, UUIDs, IPs, tokens, and any other
+ * credential are NEVER stored in this table.
  *
  * Both endpoints are IP-rate-limited.
  */
 export const dynamic = "force-dynamic";
 
-const PROTOCOLS = ["SSH", "VMESS", "VLESS", "TROJAN"] as const;
-const ACTIONS = ["CREATE"] as const;
+// Accepted `kind` values:
+//   STATUS                       — internal status-transition event
+//   SSH | VMESS | VLESS | TROJAN — external VPN-account-creation event
+const KINDS = ["STATUS", "SSH", "VMESS", "VLESS", "TROJAN"] as const;
 
 const createSchema = z.object({
-  protocol: z.enum(PROTOCOLS),
+  // `kind` is the canonical name; `protocol` is accepted as an alias so
+  // existing external integrations that POST { protocol: "VMESS", ... }
+  // keep working without code changes on their side.
+  kind: z.enum(KINDS).optional(),
+  protocol: z.enum(KINDS).optional(),
   serverName: z.string().trim().min(1).max(80),
-  action: z.enum(ACTIONS).default("CREATE"),
+  action: z.string().trim().min(1).max(40).default("CREATE"),
 });
 
 export async function GET(req: Request) {
@@ -38,7 +53,7 @@ export async function GET(req: Request) {
       take: limit,
       select: {
         id: true,
-        protocol: true,
+        kind: true,
         serverName: true,
         action: true,
         createdAt: true,
@@ -47,7 +62,7 @@ export async function GET(req: Request) {
     return NextResponse.json({
       activities: rows.map((r) => ({
         id: r.id,
-        protocol: r.protocol,
+        kind: r.kind,
         serverName: r.serverName,
         action: r.action,
         createdAt: r.createdAt.toISOString(),
@@ -61,8 +76,8 @@ export async function GET(req: Request) {
 
 /**
  * Admin-only ingest. Designed to be called from the operator's order
- * system after a VPN account is created. Strict allowlist on protocol
- * + action; any other field in the body is ignored.
+ * system after a VPN account is created. Strict allowlist on kind +
+ * action; any other field in the body is ignored.
  */
 export async function POST(req: Request) {
   const limited = enforceRateLimit(req, WRITE_LIMIT);
@@ -71,10 +86,17 @@ export async function POST(req: Request) {
   if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
   try {
-    const data = createSchema.parse(await req.json());
+    const parsed = createSchema.parse(await req.json());
+    const kind = parsed.kind ?? parsed.protocol;
+    if (!kind) {
+      return NextResponse.json(
+        { error: "kind (or protocol) is required" },
+        { status: 400 },
+      );
+    }
     const created = await prisma.activity.create({
-      data,
-      select: { id: true, protocol: true, serverName: true, action: true, createdAt: true },
+      data: { kind, serverName: parsed.serverName, action: parsed.action },
+      select: { id: true, kind: true, serverName: true, action: true, createdAt: true },
     });
     return NextResponse.json(
       {

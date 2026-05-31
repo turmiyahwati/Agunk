@@ -6,7 +6,6 @@ export type AgentPayload = {
   uptime?: number;
   cpu?: number;
   ram?: number;
-  ping?: number;
   /**
    * Combined RX+TX throughput in Mbps. Kept for backward compatibility
    * with the v1.2 agent contract (some operators may not have upgraded
@@ -17,8 +16,6 @@ export type AgentPayload = {
   rx_speed?: number;
   /** Realtime upload throughput (Mbps, 1 decimal). Agent v1.3+. */
   tx_speed?: number;
-  /** NIC link speed in Mbps (e.g. 1000 = 1 Gbps). Agent v1.4+. */
-  link_speed_mbps?: number;
   /** Last Ookla speedtest download result (Mbps). Agent v1.4+. */
   last_test_down_mbps?: number;
   /** Last Ookla speedtest upload result (Mbps). Agent v1.4+. */
@@ -172,12 +169,9 @@ export async function syncServer(serverId: string) {
   const data = {
     status,
     activeUsers: online ? active : 0,
-    pingMs: online ? payload?.ping ?? s.pingMs : 0,
     speedMbps: combinedSpeed,
     rxSpeedMbps: rxSpeed,
     txSpeedMbps: txSpeed,
-    // ── Tier 1: NIC port capacity (static baseline) ──
-    linkSpeedMbps: online ? payload?.link_speed_mbps ?? s.linkSpeedMbps : s.linkSpeedMbps,
     // ── Tier 2: Daily Ookla speedtest result (refreshed at 03:00 local) ──
     // Persist whenever the agent reports it. We never overwrite with
     // zeros from an offline agent — that would erase a perfectly good
@@ -228,6 +222,29 @@ export async function syncServer(serverId: string) {
 
   await prisma.server.update({ where: { id: s.id }, data });
 
+  // Status-transition activity feed.
+  //
+  // Whenever a sync detects the server has moved between status states
+  // (ONLINE → OFFLINE, OFFLINE → ONLINE, etc.) we append a row to the
+  // Activity table so the public homepage's "Realtime Activity" feed
+  // shows REAL events driven by actual probes — not synthetic data.
+  //
+  // Best-effort: a write failure must not break the sync (e.g. fresh
+  // database that hasn't run `prisma db push` yet to add the renamed
+  // column). The catch silences errors so the rest of the sync still
+  // completes and persists.
+  if (s.status !== status) {
+    await prisma.activity
+      .create({
+        data: {
+          kind: "STATUS",
+          serverName: s.name,
+          action: `${s.status}→${status}`,
+        },
+      })
+      .catch(() => {});
+  }
+
   // Keep a small rolling history (best-effort)
   await prisma.serverMetric
     .create({
@@ -235,7 +252,6 @@ export async function syncServer(serverId: string) {
         serverId: s.id,
         status: data.status,
         activeUsers: data.activeUsers,
-        pingMs: data.pingMs,
         speedMbps: data.speedMbps,
         rxSpeedMbps: data.rxSpeedMbps,
         txSpeedMbps: data.txSpeedMbps,
