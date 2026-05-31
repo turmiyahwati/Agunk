@@ -1,10 +1,18 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sparkles, Activity as ActivityIcon, Power, AlertTriangle } from "lucide-react";
 import { shouldPoll, timeAgo } from "@/lib/utils";
 
 const REFRESH_MS = Number(process.env.NEXT_PUBLIC_REFRESH_MS || 10000);
+// Activity feed polls a separate (faster) cadence than server cards.
+// CREATE / status events are inherently more time-sensitive than card
+// metrics — visitors expect them to appear within a few seconds. Default
+// is half the card cadence (5 s); operators can tune via env without
+// touching the code.
+const ACTIVITY_REFRESH_MS = Number(
+  process.env.NEXT_PUBLIC_ACTIVITY_REFRESH_MS || 5000,
+);
 
 type ActivityKind = "STATUS" | "SSH" | "VMESS" | "VLESS" | "TROJAN";
 
@@ -85,14 +93,25 @@ function statusLabel(action: string): string {
 export function ActivityLog({ refreshNonce = 0 }: { refreshNonce?: number } = {}) {
   const [items, setItems] = useState<Activity[] | null>(null);
   const [, forceTick] = useState(0);
+  const inflightRef = useRef<AbortController | null>(null);
 
   const fetchOnce = useCallback(async () => {
+    inflightRef.current?.abort();
+    const ctrl = new AbortController();
+    inflightRef.current = ctrl;
     try {
-      const res = await fetch("/api/activity?limit=12", { cache: "no-store" });
+      const res = await fetch("/api/activity?limit=12", {
+        cache: "no-store",
+        signal: ctrl.signal,
+      });
       const j = await res.json();
+      if (ctrl.signal.aborted) return;
       setItems(j.activities ?? []);
-    } catch {
+    } catch (err) {
+      if ((err as DOMException)?.name === "AbortError") return;
       setItems([]);
+    } finally {
+      if (inflightRef.current === ctrl) inflightRef.current = null;
     }
   }, []);
 
@@ -100,7 +119,7 @@ export function ActivityLog({ refreshNonce = 0 }: { refreshNonce?: number } = {}
     fetchOnce();
     const t = setInterval(() => {
       if (shouldPoll()) fetchOnce();
-    }, REFRESH_MS);
+    }, ACTIVITY_REFRESH_MS);
     const onVis = () => {
       if (typeof document !== "undefined" && !document.hidden) fetchOnce();
     };
@@ -112,6 +131,8 @@ export function ActivityLog({ refreshNonce = 0 }: { refreshNonce?: number } = {}
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", onVis);
       }
+      inflightRef.current?.abort();
+      inflightRef.current = null;
     };
   }, [fetchOnce]);
 

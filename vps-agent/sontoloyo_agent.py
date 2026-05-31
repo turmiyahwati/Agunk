@@ -160,19 +160,20 @@ _speedtest_lock = threading.Lock()
 # buffer can hold (e.g. >100 new accounts between syncs) the oldest
 # events are dropped — that is acceptable trade-off vs unbounded
 # memory growth.
-_WATCHER_INTERVAL_S = float(os.environ.get("SONTOLOYO_WATCHER_INTERVAL", "5"))
+_WATCHER_INTERVAL_S = float(os.environ.get("SONTOLOYO_WATCHER_INTERVAL", "3"))
 _WATCHER_DISABLED = os.environ.get("SONTOLOYO_WATCHER_DISABLE", "") == "1"
 _EVENT_BUFFER_MAX = int(os.environ.get("SONTOLOYO_EVENT_BUFFER", "100"))
 
 _events_lock = threading.Lock()
 _events_buffer: list[dict] = []  # FIFO; trimmed to _EVENT_BUFFER_MAX
 _ssh_snapshot: set[str] = set()  # sha256-truncated hashes of #ssh# lines
-_xray_snapshot: set[tuple[str, str]] = set()  # (email, "VMESS"|"VLESS"|"TROJAN")
+_xray_snapshot: set[tuple[str, str]] = set()  # (email, "VMESS"|"VLESS"|"TROJAN") from config.json
+_xray_db_snapshot: set[tuple[str, str]] = set()  # (line_hash, protocol) from /etc/<proto>/.<proto>.db
 
 # Per-call result cache (TTL seconds). Lets us make /api/status return in
 # milliseconds even though the underlying probes (cek-vme, vnstat, ping)
 # are slow subprocess calls. Tuned via SONTOLOYO_CACHE_TTL.
-_CACHE_TTL = float(os.environ.get("SONTOLOYO_CACHE_TTL", "3"))
+_CACHE_TTL = float(os.environ.get("SONTOLOYO_CACHE_TTL", "5"))
 _cache: dict[str, tuple[float, object]] = {}
 _cache_lock = threading.Lock()
 
@@ -196,7 +197,7 @@ def _cached(key: str, ttl: float, producer: Callable[[], T]) -> T:
     return value
 
 
-app = FastAPI(title="Sontoloyo VPS Agent", version="1.7.0")
+app = FastAPI(title="Sontoloyo VPS Agent", version="1.7.1")
 
 
 # Prime the per-process CPU sampler so the first request that lands on
@@ -337,9 +338,19 @@ def _vnstat_iface_traffic() -> dict:
     """Return the ``traffic`` block from vnstat for the default-route iface.
 
     Empty dict on any failure — callers should treat missing keys as 0.
-    Memoised inside the per-call cache window so we don't shell out to
-    vnstat once per traffic helper.
+    Cached for 60 seconds (vnstat itself only updates its rolling
+    counters on a per-minute cadence, so re-running the binary more
+    often than that is pure overhead). The cache also amortises the
+    cost across the three helpers — `_vnstat_total`, `_vnstat_today`,
+    and any caller of `/api/traffic` — so a single tick of the agent
+    cost ~1 vnstat shell-out per minute instead of one per status
+    request.
     """
+    return _cached("vnstat_traffic", 60.0, _vnstat_iface_traffic_uncached)
+
+
+def _vnstat_iface_traffic_uncached() -> dict:
+    """Actual vnstat shell-out. Wrapped by the public helper above."""
     iface_pref = _default_route_iface()
     try:
         out = subprocess.check_output(
@@ -934,11 +945,27 @@ def _xray_email_protocol_pairs() -> set[tuple[str, str]]:
     — and therefore multiple CREATE events on first observation,
     which matches the dashboard's labels CREATE VMESS / CREATE VLESS
     / CREATE TROJAN that the operator wants to see.
+
+    Multi-path resolution: previously this function returned after the
+    FIRST config path that existed on disk, which meant a 3-byte
+    placeholder file at /usr/local/etc/xray/config.json shadowed the
+    real 6 KB file at /etc/xray/config.json — leaving the dashboard
+    convinced the box ran zero Xray accounts. We now read every path
+    that exists AND is large enough to plausibly contain a real config
+    (>= 100 bytes) and union the results, so a placeholder cannot
+    silently hide the live config.
     """
-    PROTOCOLS = ("vmess", "vless", "trojan")
     pairs: set[tuple[str, str]] = set()
     for cfg in _xray_config_paths():
         if not os.path.isfile(cfg):
+            continue
+        try:
+            if os.path.getsize(cfg) < 100:
+                # Placeholder / stub file — autoscripts often `touch`
+                # the canonical path to make the directory exist while
+                # writing the real config elsewhere.
+                continue
+        except Exception:
             continue
         try:
             with open(cfg) as fp:
@@ -956,10 +983,63 @@ def _xray_email_protocol_pairs() -> set[tuple[str, str]]:
                 email = em.group(1)
                 email_hash = hashlib.sha256(email.encode()).hexdigest()[:16]
                 pairs.add((email_hash, protocol))
-        # Stop after the first config file that exists — secondary
-        # paths in `_xray_config_paths()` are fallbacks, not aggregates.
-        break
     return pairs
+
+
+# Per-protocol Premium-installer database paths.
+#
+# The Vladiyot / FuxiVPS / Apik family of autoscripts maintains a flat
+# text file per protocol under /etc/<protocol>/.<protocol>.db with one
+# `### user expirydate` line per active subscriber. These files are the
+# autoscript's source of truth and are MUCH more reliable than parsing
+# config.json — many autoscripts edit config.json minimally and rely on
+# the db files for state.
+_XRAY_DB_PATHS: dict[str, tuple[str, ...]] = {
+    "VMESS":  ("/etc/vmess/.vmess.db",   "/etc/xray/.vmess.db"),
+    "VLESS":  ("/etc/vless/.vless.db",   "/etc/xray/.vless.db"),
+    "TROJAN": ("/etc/trojan/.trojan.db", "/etc/xray/.trojan.db"),
+}
+
+
+def _xray_db_signatures() -> set[tuple[str, str]]:
+    """Return `(line_hash, protocol)` tuples for every entry in the
+    autoscript-managed per-protocol databases.
+
+    Each line is sha256-truncated to 16 hex chars before being stored
+    so usernames / expiry dates never live in agent memory beyond the
+    few microseconds it takes to compute the diff. Empty lines and
+    lines starting with `#!` (admin / reserved markers) are skipped.
+
+    Compared to the JSON parser above this is dramatically cheaper
+    (one stat + read per protocol per tick) AND more compatible with
+    the typical Indonesian Premium installer convention where the
+    .vmess.db / .vless.db / .trojan.db files are the canonical state,
+    not config.json.
+    """
+    sigs: set[tuple[str, str]] = set()
+    for protocol, paths in _XRAY_DB_PATHS.items():
+        for path in paths:
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path) as fp:
+                    for line in fp:
+                        stripped = line.strip()
+                        if not stripped:
+                            continue
+                        # Skip `#!` admin / reserved-marker lines that
+                        # some autoscripts insert at install time —
+                        # those are not real subscribers.
+                        if stripped.startswith("#!"):
+                            continue
+                        sig = hashlib.sha256(stripped.encode()).hexdigest()[:16]
+                        sigs.add((sig, protocol))
+            except Exception:
+                continue
+            # Use the first path that exists per-protocol; the secondary
+            # paths in the tuple are operator-specific fallbacks.
+            break
+    return sigs
 
 
 def _emit_event(kind: str) -> None:
@@ -998,21 +1078,39 @@ def _drain_events() -> list[dict]:
 def _watcher_loop() -> None:
     """Daemon thread: poll on-disk account stores and emit events.
 
+    Three independent sources are watched per tick — each gets its own
+    snapshot so a deletion in one source does not cancel out a creation
+    in another:
+
+      * SSH lines in /etc/ssh/.ssh.db                 → SSH events
+      * Per-protocol DB files /etc/<proto>/.<proto>.db → V*/TROJAN events
+      * `"email"` fields in the live xray config.json → V*/TROJAN events
+        (secondary; only catches autoscripts that mirror entries into
+        config.json — useful as a fallback when the .db files are
+        absent on a non-standard installer)
+
     The very first iteration runs in "snapshot mode" — it captures
     the current state without emitting events. Otherwise every
     pre-existing account would be reported as freshly-created at
     agent startup, flooding the dashboard's activity feed with
     history. From the second iteration onwards, only DIFFs versus
     the previous snapshot are emitted.
+
+    The xray-config and xray-db sources can BOTH detect the same new
+    account (when the autoscript writes to both places). The dashboard
+    de-duplicates such collisions on its side via the createdAt
+    timestamp + kind + serverName tuple match within a 5-second
+    window — see lib/monitor.ts.
     """
-    global _ssh_snapshot, _xray_snapshot
+    global _ssh_snapshot, _xray_snapshot, _xray_db_snapshot
     # Initial snapshot.
     try:
         _ssh_snapshot = _ssh_signatures()
         _xray_snapshot = _xray_email_protocol_pairs()
+        _xray_db_snapshot = _xray_db_signatures()
         print(
             f"[watcher] initial snapshot: ssh={len(_ssh_snapshot)} "
-            f"xray={len(_xray_snapshot)}",
+            f"xray_cfg={len(_xray_snapshot)} xray_db={len(_xray_db_snapshot)}",
             flush=True,
         )
     except Exception as e:
@@ -1030,13 +1128,21 @@ def _watcher_loop() -> None:
                     _emit_event("SSH")
             _ssh_snapshot = cur_ssh
 
-            # Xray per-protocol diff.
+            # Xray config.json diff (per-inbound emails).
             cur_xray = _xray_email_protocol_pairs()
             new_xray = cur_xray - _xray_snapshot
             if new_xray:
                 for _, protocol in new_xray:
                     _emit_event(protocol)
             _xray_snapshot = cur_xray
+
+            # Xray per-protocol .db file diff (autoscript convention).
+            cur_xray_db = _xray_db_signatures()
+            new_xray_db = cur_xray_db - _xray_db_snapshot
+            if new_xray_db:
+                for _, protocol in new_xray_db:
+                    _emit_event(protocol)
+            _xray_db_snapshot = cur_xray_db
         except Exception as e:
             print(f"[watcher] error: {e}", flush=True)
             time.sleep(30)

@@ -92,15 +92,24 @@ export async function GET(req: Request) {
         createdAt: true,
       },
     });
-    return NextResponse.json({
-      activities: rows.map((r) => ({
-        id: r.id,
-        kind: r.kind,
-        serverName: r.serverName,
-        action: r.action,
-        createdAt: r.createdAt.toISOString(),
-      })),
-    });
+    return NextResponse.json(
+      {
+        activities: rows.map((r) => ({
+          id: r.id,
+          kind: r.kind,
+          serverName: r.serverName,
+          action: r.action,
+          createdAt: r.createdAt.toISOString(),
+        })),
+      },
+      {
+        // Short cache window — activity feed polls every 5 s, but spam
+        // refreshes within a 2 s window all share the same response.
+        headers: {
+          "Cache-Control": "public, max-age=2, stale-while-revalidate=5",
+        },
+      },
+    );
   } catch {
     // If the table does not yet exist (forgot to migrate), return empty.
     return NextResponse.json({ activities: [] });

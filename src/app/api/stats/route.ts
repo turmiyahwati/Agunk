@@ -34,11 +34,22 @@ export async function GET(req: Request) {
     }),
   ]);
 
-  return NextResponse.json({
-    servers: { total, online, offline, full, warning },
-    connections: {
-      active: agg._sum.activeUsers ?? 0,
-      capacity: agg._sum.maxSlot ?? 0,
+  return NextResponse.json(
+    {
+      servers: { total, online, offline, full, warning },
+      connections: {
+        active: agg._sum.activeUsers ?? 0,
+        capacity: agg._sum.maxSlot ?? 0,
+      },
     },
-  });
+    {
+      // 2 s edge/browser cache + 8 s stale-while-revalidate. Visitors
+      // who spam-refresh see the cached counters instead of pummeling
+      // the DB; legitimate background polling still gets fresh data
+      // every 10 s.
+      headers: {
+        "Cache-Control": "public, max-age=2, stale-while-revalidate=8",
+      },
+    },
+  );
 }
