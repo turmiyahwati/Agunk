@@ -5,6 +5,15 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Force the agent process to compute "today" in Asia/Jakarta (WIB),
+# regardless of the host's `timedatectl` setting. This matters for
+# `_count_active_ssh_in_db` — it compares a parsed expiry date against
+# `datetime.now()` to decide whether a subscriber is still active.
+# A VPS provisioned in Singapore, Tokyo, or Frankfurt would otherwise
+# see "today" shift by 1-7 hours from the operator's mental model and
+# either over- or under-count expiring accounts at the day boundary.
+# Operators that need a different TZ can override this in the env file.
+Environment="TZ=Asia/Jakarta"
 EnvironmentFile=/etc/sontoloyo-agent.env
 WorkingDirectory=/opt/sontoloyo-agent
 ExecStart=/opt/sontoloyo-agent/.venv/bin/python -m uvicorn sontoloyo_agent:app --host ${SONTOLOYO_HOST} --port ${SONTOLOYO_PORT}

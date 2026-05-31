@@ -12,6 +12,30 @@ provider-level firewalls — no port 8787 ever needs to be public.
 
 ---
 
+## ⚡ Quick install (recommended)
+
+If you want the fastest path on a fresh Ubuntu 24.04 VPS, use the auto-installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/turmiyahwati/Agunk/main/scripts/install-dashboard.sh \
+  | sudo bash
+```
+
+It runs **steps 3 through 9 of this guide automatically** and pauses at step
+7 (Cloudflare DNS + SSL) for the manual Cloudflare actions. See
+[INSTALL.md](./INSTALL.md) for details. Cloudflare configuration is
+intentionally manual to avoid bricking your account.
+
+For disaster recovery (restore from backup), see [RECOVERY.md](./RECOVERY.md).
+
+The rest of this document is the **manual** procedure — useful when:
+- You want to understand what the installer does step-by-step
+- You're on a different distro the installer doesn't support yet
+- You're debugging an installer-step failure
+- You're integrating into your own automation
+
+---
+
 ## Daftar Isi
 
 1. [Arsitektur](#1-arsitektur)
