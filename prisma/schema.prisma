@@ -83,6 +83,19 @@ model Server {
   lastSpeedtestAt        DateTime?
   rxBytes      BigInt   @default(0)
   txBytes      BigInt   @default(0)
+  /// Today's traffic counters (vnstat daily bucket, resets at midnight
+  /// local time). Populated by agent v1.5+. Older agents leave these
+  /// at 0 — the UI handles that gracefully by showing "0 B" for the
+  /// TODAY tile, which matches the empty state on a freshly-installed
+  /// vnstat with no day data yet.
+  rxBytesToday BigInt   @default(0)
+  txBytesToday BigInt   @default(0)
+  /// Since-reboot byte counters (kernel `/proc/net/dev`, read via
+  /// psutil). These reset on every VPS reboot and match the "RX / TX"
+  /// line in the Premium auto-installer's main menu — letting visitors
+  /// see the session-level snapshot side-by-side with the daily total.
+  rxBytesBoot  BigInt   @default(0)
+  txBytesBoot  BigInt   @default(0)
   uptimeSec    Int      @default(0)
   cpuPercent   Float    @default(0)
   ramPercent   Float    @default(0)

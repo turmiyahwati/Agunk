@@ -3,7 +3,7 @@
 Lightweight Python (FastAPI) agent that exposes server health to the
 **PT Sontoloyo Monitor** dashboard. Author: **Pakde Xresx Digital Store**.
 
-Current contract: **v1.4** (3-tier speed display: NIC link + daily Ookla + realtime RX/TX).
+Current contract: **v1.5** (3-tier speed display + 3-window traffic counters).
 
 ## What it reports
 
@@ -25,6 +25,9 @@ Current contract: **v1.4** (3-tier speed display: NIC link + daily Ookla + realt
   "speed": 12.4,
 
   "rx": 12345678, "tx": 87654321,
+  "rx_today": 5432109, "tx_today": 3210987,
+  "rx_boot":  2345678, "tx_boot":  1234567,
+
   "active_users": 27,
   "ssh": true, "xray": true, "nginx": true, "udp": false,
   "total_ssh": 38, "total_xray": 0
@@ -41,6 +44,19 @@ questions:
 | `link_speed_mbps` | "How big is the pipe?" | Kernel-reported NIC link speed | Free |
 | `last_test_*` | "What's the real-world max?" | Ookla CLI, run daily off-peak | ~6 GB/month per server |
 | `rx_speed` / `tx_speed` | "How busy is it now?" | psutil counter delta | Free |
+
+### Traffic counters (3 windows)
+
+| Field | Window | Source | Resets on |
+|---|---|---|---|
+| `rx` / `tx` | Current calendar month | `vnstat -m` last entry | Month rollover |
+| `rx_today` / `tx_today` | Today (calendar day) | `vnstat -d` last entry | Midnight local |
+| `rx_boot` / `tx_boot` | Since last reboot | `psutil.net_io_counters()` | VPS reboot |
+
+The dashboard renders `rx_today` / `tx_today` as the prominent
+**TODAY** tile next to a `rx_boot` / `tx_boot` "since reboot" tile so
+operators see daily-billing numbers alongside the session-level
+snapshot Premium installer panels expose in their main menu.
 
 `link_speed_mbps`: Mbps from the kernel for the default-route
 interface (`1000` = 1 Gbps NIC, `10000` = 10 Gbps). `0` means unknown
@@ -202,20 +218,18 @@ ground truth caused a real-world bug where the dashboard reported 41
 - Tighten `SONTOLOYO_CORS_ORIGINS` to only your dashboard domain in
   production.
 
-## Migration from v1.3
+## Migration from v1.4
 
-If your dashboard already runs v1.3 of the agent:
+If your dashboard already runs v1.4 of the agent:
 
 1. `git pull` the latest agent code.
-2. Re-run `bash install.sh` (idempotent — installs the Ookla CLI and
-   keeps your existing API key).
-3. The new payload includes `link_speed_mbps`, `last_test_*` fields.
-   Older v1.3 dashboards continue to work because they ignore unknown
-   fields and the existing `rx_speed`/`tx_speed`/`speed` fields are
-   unchanged.
+2. Re-run `bash install.sh` (idempotent — keeps your existing API key).
+3. The new payload includes `rx_today`, `tx_today`, `rx_boot`,
+   `tx_boot` fields. Older v1.4 dashboards continue to work because
+   they ignore unknown fields and the existing fields are unchanged.
 4. If your dashboard is also upgraded, run `npx prisma db push` on it
-   to add the new `linkSpeedMbps` / `lastSpeedtest*` columns. The
-   migration is non-destructive.
+   to add the new `rxBytesToday` / `txBytesToday` / `rxBytesBoot` /
+   `txBytesBoot` columns. The migration is non-destructive.
 
 ## Bandwidth impact
 

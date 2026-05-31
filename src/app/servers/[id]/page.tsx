@@ -142,7 +142,6 @@ export default function PublicServerDetail() {
             <div className="text-2xl font-bold">
               <LivePing host={server.pingHost} fallback={server.pingMs} />
             </div>
-            <div className="mt-1 text-[10px] text-slate-500">via Cloudflare edge</div>
           </div>
           <Tile icon={Server} label="Slot" value={`${server.activeUsers}/${server.maxSlot}`} bar={pct} />
         </div>
@@ -172,9 +171,6 @@ export default function PublicServerDetail() {
               </div>
               <div className="font-mono text-2xl font-bold text-slate-100">
                 {formatLinkSpeed(server.linkSpeedMbps)}
-              </div>
-              <div className="mt-1 text-[10px] text-slate-500">
-                Datacenter backbone (NIC link)
               </div>
             </div>
 
@@ -229,20 +225,70 @@ export default function PublicServerDetail() {
         <div className="grid gap-3 sm:gap-4 md:grid-cols-3">
           <div className="glass p-5 md:col-span-2">
             <div className="mb-2 flex items-center justify-between">
-              <h3 className="font-semibold">User Aktif (history)</h3>
-              <span className="text-xs text-slate-400">{metrics.length} samples</span>
+              <h3 className="font-semibold">Live Metrics (history)</h3>
+              <div className="flex items-center gap-3 text-[10px]">
+                <span className="inline-flex items-center gap-1 text-slate-400">
+                  <span className="h-2 w-2 rounded-full bg-cyan-400" /> CPU %
+                </span>
+                <span className="inline-flex items-center gap-1 text-slate-400">
+                  <span className="h-2 w-2 rounded-full bg-fuchsia-400" /> RAM %
+                </span>
+                <span className="inline-flex items-center gap-1 text-slate-400">
+                  <span className="h-2 w-2 rounded-full bg-emerald-400" /> Users
+                </span>
+                <span className="text-slate-500">· {metrics.length} samples</span>
+              </div>
             </div>
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={metrics}>
                   <XAxis dataKey="ts" hide />
-                  <YAxis hide />
+                  {/*
+                    Two y-axes so CPU/RAM (0-100%) and active users
+                    (0..maxSlot) don't squash each other on the same
+                    scale. activeUsers gets its own axis on the right.
+                  */}
+                  <YAxis yAxisId="pct" hide domain={[0, 100]} />
+                  <YAxis yAxisId="users" orientation="right" hide />
                   <Tooltip
-                    contentStyle={{ background: "rgba(15,23,42,0.9)", border: "1px solid rgba(34,211,238,0.3)", borderRadius: 12, color: "#e2e8f0" }}
+                    contentStyle={{
+                      background: "rgba(15,23,42,0.9)",
+                      border: "1px solid rgba(34,211,238,0.3)",
+                      borderRadius: 12,
+                      color: "#e2e8f0",
+                    }}
                     labelFormatter={(v) => new Date(v).toLocaleTimeString()}
                   />
-                  <Line type="monotone" dataKey="activeUsers" stroke="#22d3ee" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="pingMs"      stroke="#a855f7" strokeWidth={1.5} dot={false} />
+                  <Line
+                    yAxisId="pct"
+                    type="monotone"
+                    dataKey="cpuPercent"
+                    stroke="#22d3ee"
+                    strokeWidth={2}
+                    dot={false}
+                    name="CPU %"
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    yAxisId="pct"
+                    type="monotone"
+                    dataKey="ramPercent"
+                    stroke="#a855f7"
+                    strokeWidth={2}
+                    dot={false}
+                    name="RAM %"
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    yAxisId="users"
+                    type="monotone"
+                    dataKey="activeUsers"
+                    stroke="#10b981"
+                    strokeWidth={1.5}
+                    dot={false}
+                    name="User Aktif"
+                    isAnimationActive={false}
+                  />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -263,12 +309,59 @@ export default function PublicServerDetail() {
           </div>
         </div>
 
+        {/*
+          ── Traffic counters: TODAY (prominent) + Since Reboot ────────────
+          Mirrors the ServerCard layout. TODAY is the daily-billing
+          number from vnstat; Since Reboot mirrors the "RX / TX" line
+          shown in the Premium installer's main menu. Both are public
+          so any visitor can verify the figures against the agent.
+        */}
+        <div className="grid gap-3 sm:gap-4 md:grid-cols-2">
+          <div className="glass p-5">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-cyan-300">
+                TODAY
+              </span>
+              <Activity size={14} className="text-cyan-300" />
+            </div>
+            <div className="font-mono text-xl font-bold text-slate-100">
+              <Download size={14} className="mb-1 mr-1 inline text-cyan-300/80" />
+              {formatBytes(server.rxBytesToday ?? 0)}
+              <span className="mx-2 text-slate-600">·</span>
+              <Upload size={14} className="mb-1 mr-1 inline text-fuchsia-300/80" />
+              {formatBytes(server.txBytesToday ?? 0)}
+            </div>
+            <div className="mt-1 text-[10px] text-slate-500">
+              Daily total · reset midnight WIB
+            </div>
+          </div>
+
+          <div className="glass p-5">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs uppercase tracking-wider text-slate-400">
+                Sejak reboot
+              </span>
+              <Server size={14} className="text-slate-400" />
+            </div>
+            <div className="font-mono text-xl font-bold text-slate-200">
+              <Download size={14} className="mb-1 mr-1 inline text-cyan-300/80" />
+              {formatBytes(server.rxBytesBoot ?? 0)}
+              <span className="mx-2 text-slate-600">·</span>
+              <Upload size={14} className="mb-1 mr-1 inline text-fuchsia-300/80" />
+              {formatBytes(server.txBytesBoot ?? 0)}
+            </div>
+            <div className="mt-1 text-[10px] text-slate-500">
+              Live counter · reset on reboot · Uptime {formatUptime(server.uptimeSec)}
+            </div>
+          </div>
+        </div>
+
         <div className="grid gap-3 sm:gap-4 md:grid-cols-3">
           {showDomain && (
             <KV icon={<Globe size={14} />} label="Endpoint" value={<span className="font-mono">{server.domain}</span>} />
           )}
           <KV icon={<Server size={14} />}   label="Uptime"   value={formatUptime(server.uptimeSec)} />
-          <KV icon={<Activity size={14} />} label="Traffic"  value={`RX ${formatBytes(server.rxBytes)} · TX ${formatBytes(server.txBytes)}`} />
+          <KV icon={<Activity size={14} />} label="Bulan ini"  value={`↓ ${formatBytes(server.rxBytes)} · ↑ ${formatBytes(server.txBytes)}`} />
           <KV label="Provider" value={server.provider} />
         </div>
       </main>

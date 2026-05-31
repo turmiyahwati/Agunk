@@ -3,7 +3,18 @@ import { memo } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
-import { Activity, Download, Upload, Network, Gauge, Users, ArrowRight } from "lucide-react";
+import {
+  Activity,
+  Cpu,
+  Download,
+  Gauge,
+  MemoryStick,
+  Network,
+  Upload,
+  Users,
+  ArrowRight,
+} from "lucide-react";
+import { Area, AreaChart, ResponsiveContainer } from "recharts";
 import { StatusBadge } from "./ui/StatusBadge";
 import { ProgressBar } from "./ui/ProgressBar";
 import { LivePing } from "./LivePing";
@@ -16,6 +27,7 @@ import {
   formatTestedSpeed,
   formatRelativeAge,
 } from "@/lib/utils";
+import { useMetricBuffer, type SparkPoint } from "@/hooks/useMetricBuffer";
 
 export type ServerSummary = {
   id: string;
@@ -48,8 +60,15 @@ export type ServerSummary = {
   lastSpeedtestPingMs?: number;
   /** ISO timestamp of the last successful speedtest (or null). */
   lastSpeedtestAt?: string | null;
+  /** Cumulative bytes for the current calendar month (vnstat). */
   rxBytes: number;
   txBytes: number;
+  /** Today's bytes (vnstat daily bucket). 0 = no daily data yet. */
+  rxBytesToday?: number;
+  txBytesToday?: number;
+  /** Since-reboot bytes (psutil counter). Resets on each VPS reboot. */
+  rxBytesBoot?: number;
+  txBytesBoot?: number;
   uptimeSec: number;
   cpuPercent?: number;
   ramPercent?: number;
@@ -73,6 +92,46 @@ function fmtLiveMbps(mbps: number | null | undefined): string {
   return Math.round(mbps).toString();
 }
 
+/**
+ * Compact sparkline area chart for CPU / RAM tiles. Renders nothing
+ * until enough samples are collected to make a curve worth looking at
+ * — a single dot is visual noise, two points form the first segment.
+ */
+function MiniSparkline({
+  data,
+  color,
+  fillId,
+}: {
+  data: SparkPoint[];
+  color: string;
+  fillId: string;
+}) {
+  if (data.length < 2) return <div className="h-8" />;
+  return (
+    <div className="h-8 -mx-1 -mb-1">
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
+          <defs>
+            <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity={0.4} />
+              <stop offset="100%" stopColor={color} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <Area
+            type="monotone"
+            dataKey="value"
+            stroke={color}
+            strokeWidth={1.5}
+            fill={`url(#${fillId})`}
+            isAnimationActive={false}
+            dot={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string }) {
   const pct = slotPercent(server.activeUsers, server.maxSlot);
   const rx = server.rxSpeedMbps ?? 0;
@@ -81,6 +140,13 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
   const testedUp = server.lastSpeedtestUpMbps ?? 0;
   const hasTested = testedDown > 0 || testedUp > 0;
   const portLabel = formatLinkSpeed(server.linkSpeedMbps);
+
+  // Rolling sparklines for the CPU / RAM tiles. The buffer is
+  // populated by the parent's polling loop — every fresh
+  // /api/servers/public response feeds a new sample in.
+  const cpuHistory = useMetricBuffer(server.cpuPercent, 30);
+  const ramHistory = useMetricBuffer(server.ramPercent, 30);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
@@ -102,10 +168,10 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
       </div>
 
       {/*
-        Live ping (browser-side, updates every 2.5 s) + uptime. The ping is
-        measured from the visitor's browser via the Cloudflare Tunnel
-        hostname, so the displayed number reflects edge-to-server latency
-        (NOT the direct visitor-to-VPS ping for a future VPN connection).
+        Live ping (browser-side, updates every 2.5 s) + uptime. The ping
+        is measured from the visitor's browser via the Cloudflare Tunnel
+        hostname, so the displayed number is honest end-to-end latency
+        from the visitor's network to the agent.
       */}
       <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
         <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2">
@@ -115,7 +181,6 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
           <div className="text-sm">
             <LivePing host={server.pingHost} fallback={server.pingMs} />
           </div>
-          <div className="mt-0.5 text-[9px] text-slate-600">via Cloudflare edge</div>
         </div>
         <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2">
           <div className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
@@ -126,15 +191,43 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
       </div>
 
       {/*
+        CPU / RAM tiles with rolling sparkline. The numbers are the
+        same realtime values the agent emits via /api/status, but the
+        sparkline retains the recent history client-side so visitors
+        SEE the load fluctuate instead of just a single static
+        percentage. No fake data — every point on the curve is one
+        polling response from the agent.
+      */}
+      <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+        <div className="rounded-lg border border-cyan-400/15 bg-cyan-400/5 p-2">
+          <div className="mb-0.5 flex items-center justify-between">
+            <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-cyan-300/80">
+              <Cpu size={11} /> CPU
+            </span>
+            <span className="font-mono text-sm text-slate-100">
+              {Math.round(server.cpuPercent ?? 0)}%
+            </span>
+          </div>
+          <MiniSparkline data={cpuHistory} color="#22d3ee" fillId={`cpu-${server.id}`} />
+        </div>
+        <div className="rounded-lg border border-fuchsia-400/15 bg-fuchsia-400/5 p-2">
+          <div className="mb-0.5 flex items-center justify-between">
+            <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-fuchsia-300/80">
+              <MemoryStick size={11} /> RAM
+            </span>
+            <span className="font-mono text-sm text-slate-100">
+              {Math.round(server.ramPercent ?? 0)}%
+            </span>
+          </div>
+          <MiniSparkline data={ramHistory} color="#a855f7" fillId={`ram-${server.id}`} />
+        </div>
+      </div>
+
+      {/*
         ── 3-Tier Network Performance ────────────────────────────────────
         Tier 1: Port Capacity   (NIC link speed, kernel — e.g. "1 Gbps")
-        Tier 2: Tested Speed    (daily Ookla benchmark — e.g. "845/812 Mbps · 6h lalu")
+        Tier 2: Tested Speed    (daily Ookla benchmark)
         Tier 3: Live Traffic    (RX/TX realtime — current load)
-
-        Each tier answers a different visitor question honestly: how big
-        is the pipe, what's the real-world max, and how busy is it now.
-        Labeled clearly so a non-technical buyer never confuses a tested
-        capacity number with their own expected VPN speed.
       */}
       <div className="mt-3 rounded-xl border border-white/5 bg-white/[0.02] p-3">
         <div className="mb-2 flex items-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
@@ -191,15 +284,47 @@ function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string
         <ProgressBar value={pct} />
       </div>
 
-      <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-3 text-[11px] text-slate-400">
-        <div>RX <span className="text-slate-200">{formatBytes(server.rxBytes)}</span></div>
-        <div>TX <span className="text-slate-200">{formatBytes(server.txBytes)}</span></div>
-        {href && (
+      {/*
+        ── Traffic counters: TODAY (prominent) + Since reboot ────────────
+        TODAY is the daily-billing-relevant number from vnstat. Since
+        Reboot mirrors the "RX / TX" line in the Premium installer
+        panel — both are public so any visitor can verify the figures.
+      */}
+      <div className="mt-4 grid grid-cols-2 gap-2 border-t border-white/5 pt-3 text-[11px]">
+        <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/5 p-2">
+          <div className="mb-0.5 text-[10px] font-bold uppercase tracking-wider text-cyan-300">
+            TODAY
+          </div>
+          <div className="font-mono text-slate-100">
+            <Download size={10} className="mb-0.5 mr-0.5 inline text-cyan-300/80" />
+            {formatBytes(server.rxBytesToday ?? 0)}
+            <span className="mx-1 text-slate-600">·</span>
+            <Upload size={10} className="mb-0.5 mr-0.5 inline text-fuchsia-300/80" />
+            {formatBytes(server.txBytesToday ?? 0)}
+          </div>
+        </div>
+        <div className="rounded-lg border border-white/10 bg-white/[0.02] p-2">
+          <div className="mb-0.5 text-[10px] uppercase tracking-wider text-slate-500">
+            Sejak reboot
+          </div>
+          <div className="font-mono text-slate-200">
+            <Download size={10} className="mb-0.5 mr-0.5 inline text-cyan-300/80" />
+            {formatBytes(server.rxBytesBoot ?? 0)}
+            <span className="mx-1 text-slate-600">·</span>
+            <Upload size={10} className="mb-0.5 mr-0.5 inline text-fuchsia-300/80" />
+            {formatBytes(server.txBytesBoot ?? 0)}
+          </div>
+        </div>
+      </div>
+
+      {href && (
+        <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500">
+          <span>Bulan ini: ↓ {formatBytes(server.rxBytes)} · ↑ {formatBytes(server.txBytes)}</span>
           <Link href={href} className="inline-flex items-center gap-1 text-cyan-300 hover:underline">
             Detail <ArrowRight size={12} />
           </Link>
-        )}
-      </div>
+        </div>
+      )}
     </motion.div>
   );
 }

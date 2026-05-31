@@ -20,7 +20,7 @@ The /health endpoint is CORS-allowed for the dashboard's public domain
 so the LivePing component in the visitor's browser can probe it for
 realtime latency measurements.
 
-JSON shape returned by /api/status (v1.4 contract):
+JSON shape returned by /api/status (v1.5 contract):
 
 {
   "ok": true,
@@ -37,8 +37,12 @@ JSON shape returned by /api/status (v1.4 contract):
   "rx_speed": 8.2, "tx_speed": 4.2,     // realtime RX/TX throughput now
   "speed": 12.4,                        // legacy combined RX+TX (kept for v1.2)
 
-  // ── Traffic counters & accounts ──
-  "rx": 12345678, "tx": 87654321,       // bytes — current month, default-route iface
+  // ── Traffic counters (3 windows side-by-side on the dashboard) ──
+  "rx": 12345678, "tx": 87654321,             // bytes — current month total
+  "rx_today": 5432109, "tx_today": 3210987,   // bytes — today (vnstat day)
+  "rx_boot":  2345678, "tx_boot":  1234567,   // bytes — since last reboot
+
+  // ── Account & service ──
   "active_users": 27,                   // active subscribers (registered, not expired)
   "ssh": true, "xray": true, "nginx": true, "udp": false,
   "total_ssh": 38, "total_xray": 0
@@ -161,7 +165,7 @@ def _cached(key: str, ttl: float, producer: Callable[[], T]) -> T:
     return value
 
 
-app = FastAPI(title="Sontoloyo VPS Agent", version="1.4.0")
+app = FastAPI(title="Sontoloyo VPS Agent", version="1.5.0")
 
 # CORS — required so the dashboard's public homepage can call /health
 # directly from a visitor's browser (cross-origin: dashboard domain →
@@ -404,19 +408,12 @@ def _default_route_iface() -> Optional[str]:
         return None
 
 
-def _vnstat_total() -> tuple[int, int]:
-    """Return (rx_bytes, tx_bytes) for the current calendar month.
+def _vnstat_iface_traffic() -> dict:
+    """Return the ``traffic`` block from vnstat for the default-route iface.
 
-    Picks the interface that backs the kernel's default route, falling
-    back to the first vnstat-tracked interface when that lookup fails.
-    Reads ``traffic.month[<latest>]`` so the figure aligns with what
-    operators see when they run ``vnstat -m`` on the box. The Premium
-    auto-installer's banner uses the same monthly-window convention,
-    so the dashboard now agrees with the panel.
-
-    Falls back to lifetime ``traffic.total`` when no monthly window is
-    present (e.g. fresh vnstat install with <1 day of history), then to
-    psutil's per-process counter as a last resort (since-boot only).
+    Empty dict on any failure — callers should treat missing keys as 0.
+    Memoised inside the per-call cache window so we don't shell out to
+    vnstat once per traffic helper.
     """
     iface_pref = _default_route_iface()
     try:
@@ -426,15 +423,27 @@ def _vnstat_total() -> tuple[int, int]:
         data = json.loads(out)
         ifaces = data.get("interfaces") or []
         if not ifaces:
-            return _net_rx_tx()
-
-        # Pick the iface matching default route; fall back to first.
+            return {}
         iface = next(
             (i for i in ifaces if i.get("name") == iface_pref),
             ifaces[0],
         )
-        traffic = iface.get("traffic", {}) or {}
+        return iface.get("traffic", {}) or {}
+    except Exception:
+        return {}
 
+
+def _vnstat_total() -> tuple[int, int]:
+    """Return (rx_bytes, tx_bytes) for the current calendar month.
+
+    Reads ``traffic.month[<latest>]`` so the figure aligns with
+    ``vnstat -m`` and the Premium auto-installer banner's MONTH line.
+    Falls back to lifetime ``traffic.total`` when no monthly window is
+    present (e.g. fresh vnstat install with <1 day of history), then to
+    psutil's per-process counter as a last resort (since-boot only).
+    """
+    traffic = _vnstat_iface_traffic()
+    if traffic:
         # Prefer the most recent month bucket. vnstat returns months
         # ordered chronologically; the last entry is the current one.
         months = traffic.get("month") or []
@@ -451,11 +460,47 @@ def _vnstat_total() -> tuple[int, int]:
         tx = int(total.get("tx", 0))
         if rx > 0 or tx > 0:
             return rx, tx
-    except Exception:
-        pass
 
     # Fallback 2: psutil since-boot. Better than reporting zero.
     return _net_rx_tx()
+
+
+def _vnstat_today() -> tuple[int, int]:
+    """Return (rx_bytes, tx_bytes) for today (calendar day, local TZ).
+
+    Reads ``traffic.day[<latest>]`` so the figure aligns with
+    ``vnstat -d``'s last entry — the same number the Premium installer
+    panel labels as "TODAY". Resets at midnight local time.
+
+    Falls back to ``(0, 0)`` when vnstat has no daily data yet (fresh
+    install with <24 hours of history) — the dashboard renders that as
+    "0 B" rather than reporting an inflated since-boot value.
+    """
+    traffic = _vnstat_iface_traffic()
+    if traffic:
+        days = traffic.get("day") or []
+        if days:
+            latest = days[-1]
+            rx = int(latest.get("rx", 0))
+            tx = int(latest.get("tx", 0))
+            return rx, tx
+    return 0, 0
+
+
+def _traffic_since_boot() -> tuple[int, int]:
+    """Return (rx_bytes, tx_bytes) summed across all interfaces since boot.
+
+    Uses ``psutil.net_io_counters()`` which reads the same ``/proc/net/dev``
+    counters that the Premium auto-installer's panel "RX / TX" line is
+    based on. Resets to 0 on every reboot — that's intentional, it's
+    the kernel-level counter, not a persistent vnstat aggregate.
+
+    Useful complement to ``rx_today`` / ``tx_today`` because it gives
+    operators an at-a-glance "how much have we served since the last
+    reboot" number without waiting for vnstat to flush its day bucket.
+    """
+    n = psutil.net_io_counters()
+    return int(n.bytes_recv), int(n.bytes_sent)
 
 
 def _count_pattern(cmd: str) -> int:
@@ -903,6 +948,8 @@ def _build_status_payload() -> dict:
     number shown in the Premium auto-installer's main menu.
     """
     rx, tx = _vnstat_total()
+    rx_today, tx_today = _vnstat_today()
+    rx_boot, tx_boot = _traffic_since_boot()
     active_ssh = _count_active_ssh_in_db("/etc/ssh/.ssh.db")
     active_xray = _active_xray_accounts()
     online_ssh = _ssh_online()
@@ -933,7 +980,17 @@ def _build_status_payload() -> dict:
         # Combined RX+TX kept for backward compatibility with any older
         # dashboard build that consumes the v1.2 contract.
         "speed": round(rx_speed + tx_speed, 1),
+        # ── Traffic counters (3 windows side-by-side on the dashboard) ──
+        # `rx`/`tx`        = current month total (vnstat month bucket).
+        # `rx_today`/`tx_today` = today's calendar day (vnstat day bucket).
+        # `rx_boot`/`tx_boot`   = since last reboot (psutil counter).
+        # The dashboard renders TODAY (prominent) alongside Since-Reboot
+        # so operators see daily billing-relevant numbers next to the
+        # session-level snapshot Premium installers expose in their main
+        # menu.
         "rx": rx, "tx": tx,
+        "rx_today": rx_today, "tx_today": tx_today,
+        "rx_boot":  rx_boot,  "tx_boot":  tx_boot,
         # Active subscribers (matches the Premium menu's ACCOUNT number).
         # Fallback to the live online count when neither DB nor config
         # has a parseable entry — better than a flat zero.
@@ -964,9 +1021,13 @@ def system(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
 def traffic(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
     _check_key(x_api_key)
     rx, tx = _vnstat_total()
+    rx_today, tx_today = _vnstat_today()
+    rx_boot, tx_boot = _traffic_since_boot()
     rx_speed, tx_speed = _throughput_split_mbps()
     return {
         "rx": rx, "tx": tx,
+        "rx_today": rx_today, "tx_today": tx_today,
+        "rx_boot":  rx_boot,  "tx_boot":  tx_boot,
         "rx_speed": rx_speed, "tx_speed": tx_speed,
         "speed": round(rx_speed + tx_speed, 1),
     }

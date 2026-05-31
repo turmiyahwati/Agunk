@@ -11,8 +11,19 @@
  */
 export function serializeServer<T extends Record<string, any>>(s: T): T {
   const o: any = { ...s };
-  if (typeof o.rxBytes === "bigint") o.rxBytes = Number(o.rxBytes);
-  if (typeof o.txBytes === "bigint") o.txBytes = Number(o.txBytes);
+  // All BigInt-typed traffic counter columns need conversion. Centralized
+  // here so any future column added with `BigInt` in schema.prisma just
+  // needs to be appended to this list.
+  for (const key of [
+    "rxBytes",
+    "txBytes",
+    "rxBytesToday",
+    "txBytesToday",
+    "rxBytesBoot",
+    "txBytesBoot",
+  ]) {
+    if (typeof o[key] === "bigint") o[key] = Number(o[key]);
+  }
   return o;
 }
 
