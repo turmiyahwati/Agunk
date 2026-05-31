@@ -104,3 +104,60 @@ echo "   curl -H \"X-API-Key: ${API_KEY}\" http://127.0.0.1:${PORT}/api/status"
 echo
 echo " Logs:    journalctl -u sontoloyo-agent -f"
 echo "=========================================================="
+echo
+echo " ── NEXT STEPS (manual, on Cloudflare side) ──────────────"
+echo
+echo " 1. Install cloudflared on this VPS (so agent is reachable"
+echo "    over the public internet WITHOUT opening any ports):"
+echo
+echo "      curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o /tmp/cloudflared.deb"
+echo "      dpkg -i /tmp/cloudflared.deb"
+echo
+echo " 2. Authenticate cloudflared against your Cloudflare account:"
+echo
+echo "      cloudflared tunnel login"
+echo "      # paste the URL it prints into your browser"
+echo
+echo " 3. Create a tunnel for THIS VPS and bind a hostname to it:"
+echo
+echo "      TUNNEL_NAME=\"agent-\$(hostname -s)\""
+echo "      DOMAIN=\"agent-\$(hostname -s).your-domain.com\""
+echo "      cloudflared tunnel create \"\$TUNNEL_NAME\""
+echo "      cloudflared tunnel route dns \"\$TUNNEL_NAME\" \"\$DOMAIN\""
+echo
+echo " 4. Write /etc/cloudflared/config.yml:"
+echo
+echo "      mkdir -p /etc/cloudflared"
+echo "      CRED_FILE=\$(ls /root/.cloudflared/*.json | head -1)"
+echo "      cat > /etc/cloudflared/config.yml <<EOF"
+echo "      tunnel: \$TUNNEL_NAME"
+echo "      credentials-file: \$CRED_FILE"
+echo "      ingress:"
+echo "        - hostname: \$DOMAIN"
+echo "          service: http://127.0.0.1:${PORT}"
+echo "        - service: http_status:404"
+echo "      EOF"
+echo
+echo " 5. Install cloudflared as a systemd service:"
+echo
+echo "      cloudflared service install"
+echo "      systemctl enable --now cloudflared"
+echo
+echo " 6. Verify tunnel is publicly reachable:"
+echo
+echo "      curl -fsS https://\$DOMAIN/health"
+echo
+echo " 7. (Optional) Once the tunnel works, lock the agent to localhost:"
+echo
+echo "      sed -i 's/^SONTOLOYO_HOST=.*/SONTOLOYO_HOST=127.0.0.1/' /etc/sontoloyo-agent.env"
+echo "      systemctl restart sontoloyo-agent"
+echo "      ufw delete allow ${PORT}/tcp 2>/dev/null || true"
+echo
+echo " 8. On the dashboard:"
+echo "      Admin → Servers → + Tambah Server"
+echo "      • VPS Agent base URL : https://\$DOMAIN"
+echo "      • API Key            : ${API_KEY}"
+echo "      Click the Wifi icon to test → toast hijau \"Agent reachable · synced\" ✅"
+echo
+echo " Full guide with screenshots: DEPLOY.md §7 (Cloudflare Tunnel)"
+echo "=========================================================="
