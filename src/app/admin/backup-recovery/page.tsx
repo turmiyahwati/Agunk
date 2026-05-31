@@ -8,6 +8,7 @@ import {
   Save,
   AlertTriangle,
   KeyRound,
+  CalendarClock,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import type { BackupConfig } from "@/lib/backup-config";
@@ -29,7 +30,7 @@ export default function BackupRecoveryPage() {
   const [config, setConfig] = useState<BackupConfig | null>(null);
   const [backups, setBackups] = useState<BackupRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<"idle" | "backup" | "test-email">("idle");
+  const [busy, setBusy] = useState<"idle" | "backup" | "test-email" | "cron">("idle");
   const [showUpload, setShowUpload] = useState(false);
   const inflightRef = useRef<AbortController | null>(null);
 
@@ -108,6 +109,30 @@ export default function BackupRecoveryPage() {
     }
   }
 
+  async function applyCron() {
+    setBusy("cron");
+    const t = toast.loading("Applying cron…");
+    try {
+      const res = await fetch("/api/backup/cron/apply", { method: "POST" });
+      const j = await res.json();
+      if (!res.ok || !j.ok) {
+        throw new Error(j.error || "Cron apply failed");
+      }
+      if (!j.reloaded) {
+        toast.success(
+          "Cron file written — daemon reload failed but cron rescans within 1 min.",
+          { id: t },
+        );
+      } else {
+        toast.success(`Cron applied · ${j.cadence}`, { id: t });
+      }
+    } catch (err) {
+      toast.error((err as Error).message, { id: t });
+    } finally {
+      setBusy("idle");
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -176,6 +201,20 @@ export default function BackupRecoveryPage() {
             <Upload size={14} />
             Upload &amp; Restore
           </button>
+          <button
+            type="button"
+            onClick={applyCron}
+            disabled={busy !== "idle"}
+            className="btn-ghost"
+            title="Rewrite /etc/cron.d/sontoloyo with the current backup interval and reload cron."
+          >
+            {busy === "cron" ? (
+              <RefreshCcw size={14} className="animate-spin" />
+            ) : (
+              <CalendarClock size={14} />
+            )}
+            Apply Cron
+          </button>
         </div>
       </div>
 
@@ -233,6 +272,35 @@ function SettingsForm({ config, onSaved }: { config: BackupConfig; onSaved: () =
       const j = await res.json();
       if (!res.ok) throw new Error(j.error || "Save failed");
       toast.success("Settings saved");
+
+      // The PATCH attempts to rewrite /etc/cron.d/sontoloyo whenever
+      // intervalHours changes. Surface the outcome so the operator
+      // knows whether the OS-level schedule actually shifted —
+      // saving the form alone is misleading otherwise.
+      const cron = j.cron;
+      if (cron) {
+        if (cron.attempted) {
+          if (cron.result.ok && cron.result.reloaded) {
+            toast.success(`Cron auto-applied · ${cron.result.cadence}`);
+          } else if (cron.result.ok && !cron.result.reloaded) {
+            toast(
+              "Cron file rewritten; daemon reload failed (will rescan within 1 min).",
+              { icon: "⚠️" },
+            );
+          } else {
+            toast.error(
+              `Cron auto-apply failed: ${cron.result.error ?? "unknown error"}. Click "Apply Cron" to retry.`,
+              { duration: 8_000 },
+            );
+          }
+        } else {
+          toast(
+            `${cron.reason} — gunakan tombol "Apply Cron" setelah env diperbaiki.`,
+            { icon: "ℹ️", duration: 7_000 },
+          );
+        }
+      }
+
       setPassphrase("");
       setSmtpPass("");
       onSaved();
@@ -273,8 +341,8 @@ function SettingsForm({ config, onSaved }: { config: BackupConfig; onSaved: () =
             <option value={24}>Every 24 hours</option>
           </select>
           <p className="mt-1 text-[11px] text-slate-500">
-            Cron at /etc/cron.d/sontoloyo-backup. Reload requires a new cron file written by
-            install-dashboard.sh.
+            Cron at /etc/cron.d/sontoloyo. Saved interval is auto-applied
+            via "Apply Cron" — no installer re-run needed.
           </p>
         </Field>
         <Field label="Retention (days)">

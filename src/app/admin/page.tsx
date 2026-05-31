@@ -3,11 +3,10 @@ import { useEffect, useState } from "react";
 import { Server as ServerIcon, Activity, Wifi, Users, AlertTriangle, PowerOff } from "lucide-react";
 import { StatCard } from "@/components/StatCard";
 import { useServers } from "@/hooks/useServers";
+import { useRuntimeConfig } from "@/hooks/useRuntimeConfig";
 import { ServerCard } from "@/components/ServerCard";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { shouldPoll } from "@/lib/utils";
-
-const REFRESH_MS = Number(process.env.NEXT_PUBLIC_REFRESH_MS || 8000);
 
 type Stats = {
   servers: { total: number; online: number; offline: number; full: number; warning: number };
@@ -15,7 +14,8 @@ type Stats = {
 };
 
 export default function AdminOverview() {
-  const { servers, loading } = useServers({ refreshMs: REFRESH_MS });
+  const { refreshMs } = useRuntimeConfig();
+  const { servers, loading } = useServers({ refreshMs });
   const [stats, setStats] = useState<Stats | null>(null);
 
   useEffect(() => {
@@ -29,7 +29,7 @@ export default function AdminOverview() {
     run();
     const t = setInterval(() => {
       if (shouldPoll()) run();
-    }, REFRESH_MS);
+    }, refreshMs);
     const onVis = () => {
       if (typeof document !== "undefined" && !document.hidden) run();
     };
@@ -43,7 +43,7 @@ export default function AdminOverview() {
         document.removeEventListener("visibilitychange", onVis);
       }
     };
-  }, []);
+  }, [refreshMs]);
 
   return (
     <div className="space-y-6">

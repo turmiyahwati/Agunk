@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Search, Globe, Server as ServerIcon, Activity, Wifi, Users, PowerOff, RefreshCcw } from "lucide-react";
 import { useServers } from "@/hooks/useServers";
+import { useRuntimeConfig } from "@/hooks/useRuntimeConfig";
 import { ServerCard } from "@/components/ServerCard";
 import { StatCard } from "@/components/StatCard";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -13,7 +14,6 @@ import { shouldPoll } from "@/lib/utils";
 
 const BRAND = process.env.NEXT_PUBLIC_BRAND_NAME || "PT Sontoloyo";
 const AUTHOR = process.env.NEXT_PUBLIC_AUTHOR || "Pakde Xresx Digital Store";
-const REFRESH_MS = Number(process.env.NEXT_PUBLIC_REFRESH_MS || 10000);
 const REFRESH_COOLDOWN_MS = 2500;
 
 type Stats = {
@@ -22,7 +22,8 @@ type Stats = {
 };
 
 export default function PublicMonitoring() {
-  const { servers, loading, refresh: refreshServers } = useServers();
+  const { refreshMs } = useRuntimeConfig();
+  const { servers, loading, refresh: refreshServers } = useServers({ refreshMs });
   const [stats, setStats] = useState<Stats | null>(null);
   const [q, setQ] = useState("");
   const [country, setCountry] = useState("ALL");
@@ -62,7 +63,7 @@ export default function PublicMonitoring() {
     fetchStats();
     const t = setInterval(() => {
       if (shouldPoll()) fetchStats();
-    }, REFRESH_MS);
+    }, refreshMs);
     const onVis = () => {
       if (typeof document !== "undefined" && !document.hidden) fetchStats();
     };
@@ -77,7 +78,7 @@ export default function PublicMonitoring() {
       statsAbortRef.current?.abort();
       statsAbortRef.current = null;
     };
-  }, [fetchStats]);
+  }, [fetchStats, refreshMs]);
 
   const handleManualRefresh = useCallback(async () => {
     if (refreshing) return;

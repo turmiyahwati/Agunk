@@ -3,16 +3,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sparkles, Activity as ActivityIcon, Power, AlertTriangle } from "lucide-react";
 import { shouldPoll, timeAgo } from "@/lib/utils";
+import { useRuntimeConfig } from "@/hooks/useRuntimeConfig";
 
-const REFRESH_MS = Number(process.env.NEXT_PUBLIC_REFRESH_MS || 10000);
 // Activity feed polls a separate (faster) cadence than server cards.
 // CREATE / status events are inherently more time-sensitive than card
-// metrics — visitors expect them to appear within a few seconds. Default
-// is half the card cadence (5 s); operators can tune via env without
-// touching the code.
-const ACTIVITY_REFRESH_MS = Number(
-  process.env.NEXT_PUBLIC_ACTIVITY_REFRESH_MS || 5000,
-);
+// metrics — visitors expect them to appear within a few seconds.
+// Cadence is sourced from runtime config (Admin → Settings) so an
+// operator can retune it without rebuilding the bundle.
 
 type ActivityKind = "STATUS" | "SSH" | "VMESS" | "VLESS" | "TROJAN";
 
@@ -81,16 +78,18 @@ function statusLabel(action: string): string {
 /**
  * Realtime feed of server-side activity events.
  *
- * Polls /api/activity every REFRESH_MS while the tab is visible. The
- * data behind the feed is REAL — every row is either a status
- * transition emitted by the monitor sync layer (`lib/monitor.ts →
- * syncServer`) or an external VPN-account event POST'd by the
- * operator's order system. There are no synthetic / demo rows.
+ * Polls /api/activity every `activityRefreshMs` (runtime-configurable
+ * via Admin → Settings) while the tab is visible. The data behind the
+ * feed is REAL — every row is either a status transition emitted by
+ * the monitor sync layer (`lib/monitor.ts → syncServer`) or an
+ * external VPN-account event POST'd by the operator's order system.
+ * There are no synthetic / demo rows.
  *
  * Bumping the optional `refreshNonce` prop forces an immediate refetch
  * (used by the public "Refresh Server" button).
  */
 export function ActivityLog({ refreshNonce = 0 }: { refreshNonce?: number } = {}) {
+  const { activityRefreshMs } = useRuntimeConfig();
   const [items, setItems] = useState<Activity[] | null>(null);
   const [, forceTick] = useState(0);
   const inflightRef = useRef<AbortController | null>(null);
@@ -119,7 +118,7 @@ export function ActivityLog({ refreshNonce = 0 }: { refreshNonce?: number } = {}
     fetchOnce();
     const t = setInterval(() => {
       if (shouldPoll()) fetchOnce();
-    }, ACTIVITY_REFRESH_MS);
+    }, activityRefreshMs);
     const onVis = () => {
       if (typeof document !== "undefined" && !document.hidden) fetchOnce();
     };
@@ -134,7 +133,7 @@ export function ActivityLog({ refreshNonce = 0 }: { refreshNonce?: number } = {}
       inflightRef.current?.abort();
       inflightRef.current = null;
     };
-  }, [fetchOnce]);
+  }, [fetchOnce, activityRefreshMs]);
 
   // External refresh trigger from the public page's "Refresh Server" button.
   useEffect(() => {
