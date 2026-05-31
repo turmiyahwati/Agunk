@@ -31,90 +31,76 @@ model User {
 }
 
 model Server {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   name        String
   domain      String
-  country     String   @default("ID")
-  countryName String   @default("Indonesia")
+  country     String  @default("ID")
+  countryName String  @default("Indonesia")
   flag        String?
-  provider    String   @default("Unknown")
+  provider    String  @default("Unknown")
   apiUrl      String?
   apiKey      String?
-  /// Public-safe hostname used by browser-side ping & speedtest.
-  /// Operator sets this to the Cloudflare Tunnel subdomain (e.g.
-  /// `agent-id1.example.com`) — it WILL be visible to all visitors of
-  /// the public homepage, so it must NOT be the real VPS IP. The
-  /// private `domain` field is masked to "" by the public API.
-  pingHost    String?
-  enabled     Boolean  @default(true)
-  refreshMs   Int      @default(10000)
-  maxSlot     Int      @default(100)
+  enabled     Boolean @default(true)
+  refreshMs   Int     @default(10000)
+  maxSlot     Int     @default(100)
 
-  status       String   @default("UNKNOWN")
-  activeUsers  Int      @default(0)
-  pingMs       Int      @default(0)
+  status      String @default("UNKNOWN")
+  activeUsers Int    @default(0)
   /// speedMbps stays as a Float column for backward compatibility with
   /// the v1.2 contract — populated as the sum of rxSpeedMbps + txSpeedMbps
   /// by the sync layer. The dashboard renders rx/tx separately now, so
   /// this field is reserved for legacy consumers and analytics export.
-  speedMbps    Float    @default(0)
+  speedMbps   Float  @default(0)
   /// Realtime download throughput (RX) in Mbps — the rate at which
   /// bytes are flowing INTO the VPS network interface right now.
   /// This is true network throughput, not a periodic speedtest.
-  rxSpeedMbps  Float    @default(0)
+  rxSpeedMbps Float  @default(0)
   /// Realtime upload throughput (TX) in Mbps — the rate at which
   /// bytes are flowing OUT of the VPS network interface right now.
-  txSpeedMbps  Float    @default(0)
-
-  /// NIC link speed (kernel-reported port capacity) in Mbps. Static
-  /// baseline displayed as the "Port" tier on the public homepage —
-  /// e.g. 1000 → "1 Gbps", 10000 → "10 Gbps". 0 means unknown
-  /// (typical for LXC / Docker veth interfaces) and the UI renders
-  /// it as "—" without dashboarding the line.
-  linkSpeedMbps          Int       @default(0)
+  txSpeedMbps Float  @default(0)
 
   /// Last completed Ookla speedtest result, refreshed once per
   /// 24 hours by the agent's internal scheduler at the configured
   /// off-peak hour (default 03:00 local). Zero / null when the
   /// benchmark has not yet run on a freshly-installed agent.
-  lastSpeedtestDownMbps  Float     @default(0)
-  lastSpeedtestUpMbps    Float     @default(0)
-  lastSpeedtestPingMs    Int       @default(0)
-  lastSpeedtestAt        DateTime?
-  rxBytes      BigInt   @default(0)
-  txBytes      BigInt   @default(0)
+  lastSpeedtestDownMbps Float     @default(0)
+  lastSpeedtestUpMbps   Float     @default(0)
+  lastSpeedtestPingMs   Int       @default(0)
+  lastSpeedtestAt       DateTime?
+  rxBytes               BigInt    @default(0)
+  txBytes               BigInt    @default(0)
   /// Today's traffic counters (vnstat daily bucket, resets at midnight
   /// local time). Populated by agent v1.5+. Older agents leave these
   /// at 0 — the UI handles that gracefully by showing "0 B" for the
   /// TODAY tile, which matches the empty state on a freshly-installed
   /// vnstat with no day data yet.
-  rxBytesToday BigInt   @default(0)
-  txBytesToday BigInt   @default(0)
+  rxBytesToday          BigInt    @default(0)
+  txBytesToday          BigInt    @default(0)
   /// Since-reboot byte counters (kernel `/proc/net/dev`, read via
   /// psutil). These reset on every VPS reboot and match the "RX / TX"
   /// line in the Premium auto-installer's main menu — letting visitors
   /// see the session-level snapshot side-by-side with the daily total.
-  rxBytesBoot  BigInt   @default(0)
-  txBytesBoot  BigInt   @default(0)
-  uptimeSec    Int      @default(0)
-  cpuPercent   Float    @default(0)
-  ramPercent   Float    @default(0)
+  rxBytesBoot           BigInt    @default(0)
+  txBytesBoot           BigInt    @default(0)
+  uptimeSec             Int       @default(0)
+  cpuPercent            Float     @default(0)
+  ramPercent            Float     @default(0)
 
-  sshActive    Boolean  @default(false)
-  xrayActive   Boolean  @default(false)
-  nginxActive  Boolean  @default(false)
-  udpActive    Boolean  @default(false)
+  sshActive   Boolean @default(false)
+  xrayActive  Boolean @default(false)
+  nginxActive Boolean @default(false)
+  udpActive   Boolean @default(false)
 
-  totalSsh     Int      @default(0)
-  totalXray    Int      @default(0)
+  totalSsh  Int @default(0)
+  totalXray Int @default(0)
 
-  lastError    String?
-  lastSyncAt   DateTime?
+  lastError  String?
+  lastSyncAt DateTime?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  metrics     ServerMetric[]
+  metrics ServerMetric[]
 }
 
 model ServerMetric {
@@ -124,7 +110,6 @@ model ServerMetric {
   ts          DateTime @default(now())
   status      String
   activeUsers Int
-  pingMs      Int
   speedMbps   Float
   rxSpeedMbps Float    @default(0)
   txSpeedMbps Float    @default(0)
@@ -145,12 +130,31 @@ model Setting {
 }
 
 // Recent activity log surfaced on the public homepage.
-// Stores ONLY non-sensitive metadata (protocol kind + server name +
-// action + timestamp). Never store usernames, passwords, UUIDs, IPs,
-// tokens, or any PII here.
+//
+// Two sources populate this feed in production:
+//   1. INTERNAL — the monitor sync layer (`syncServer`) writes a row
+//      whenever a server's status changes (e.g. ONLINE → OFFLINE,
+//      OFFLINE → ONLINE). These are the events visitors see by
+//      default — fully real, driven by actual probes against each
+//      monitored VPS.
+//   2. EXTERNAL — operator order systems may POST to /api/activity
+//      after a VPN account is created. Optional integration, kept for
+//      backward compatibility with operators that already wired it up.
+//
+// The `kind` column is what the row represents. For internal events:
+//   "STATUS"  — server status transition; serverName + action carry the
+//               server name and the transition string (e.g. "OFFLINE→ONLINE").
+// For external events the legacy values are still accepted:
+//   "SSH" | "VMESS" | "VLESS" | "TROJAN"  — VPN account creation.
+//
+// Stores ONLY non-sensitive metadata. Never store usernames, passwords,
+// UUIDs, IPs, tokens, or any other PII here.
 model Activity {
   id         String   @id @default(cuid())
-  protocol   String   // "SSH" | "VMESS" | "VLESS" | "TROJAN"
+  /// Event kind — see model docstring for the accepted values. Maps to
+  /// the legacy `protocol` column on disk (kept for SQLite/Postgres
+  /// rename-free migration).
+  kind       String   @map("protocol")
   serverName String
   action     String   @default("CREATE")
   createdAt  DateTime @default(now())

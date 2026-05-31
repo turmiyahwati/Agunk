@@ -24,35 +24,6 @@ const apiUrl = z
   })
   .pipe(z.string().url().nullable().optional());
 
-/**
- * Forgiving hostname validator for the public-facing ping host.
- *
- * Visitors will probe this hostname directly from their browser, so it
- * MUST be a public DNS name (e.g. a Cloudflare Tunnel subdomain). We
- * accept bare hostnames OR full URLs, normalize to bare host. We reject
- * IP addresses (operators routinely paste the real VPS IP here, which
- * defeats the privacy of the masked `domain` field).
- */
-const pingHost = z
-  .string()
-  .nullable()
-  .optional()
-  .transform((v) => {
-    if (v == null) return v;
-    const t = v.trim().replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
-    return t || null;
-  })
-  .pipe(
-    z
-      .string()
-      .regex(
-        /^(?!\d+\.\d+\.\d+\.\d+$)[a-z0-9.-]+\.[a-z]{2,}$/i,
-        "pingHost must be a public hostname (not an IP)",
-      )
-      .nullable()
-      .optional(),
-  );
-
 const createSchema = z.object({
   name: z.string().min(1),
   domain: z.string().min(1),
@@ -62,7 +33,6 @@ const createSchema = z.object({
   provider: z.string().min(1),
   apiUrl,
   apiKey: z.string().nullable().optional(),
-  pingHost,
   enabled: z.boolean().optional(),
   refreshMs: z.number().int().min(1000).max(600000).optional(),
   maxSlot: z.number().int().min(1).max(100000),

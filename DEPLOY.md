@@ -363,13 +363,12 @@ systemctl reload nginx
 - **Network → WebSockets** → ON
 - **Network → HTTP/3 (QUIC)** → ON (mempercepat first byte)
 - **Page Rule** untuk `monitoring.pakde-premium.xyz/api/*` → Cache Level **Bypass**
-- **Page Rule** untuk `agent-*.pakde-premium.xyz/health` → Cache Level **Bypass** (live ping butuh response real-time, tidak boleh di-cache)
 
 ⚠️ **Settings yang HARUS dihindari**:
 
 - **Speed → Optimization → Rocket Loader** = OFF (suka break Next.js hydration)
 - **Speed → Optimization → Email Address Obfuscation** = OFF (mengganggu rendering JS)
-- **Caching → Cache Level: Cache Everything global** = JANGAN — `/api/*` dan `/health` harus bypass
+- **Caching → Cache Level: Cache Everything global** = JANGAN — `/api/*` harus bypass
 
 ### 5.6. Test HTTPS
 
@@ -547,7 +546,6 @@ Buka `https://monitoring.pakde-premium.xyz/admin/servers` → login admin.
    - **Max Slot**: `100`
    - **VPS Agent base URL**: `https://agent-id1.pakde-premium.xyz` ← **HTTPS, tanpa port, tanpa /api/status**
    - **API Key**: paste API key dari Step 6.2
-   - **Public Ping Host**: `agent-id1.pakde-premium.xyz` ← **WAJIB diisi** untuk fitur browser-side LivePing & LiveSpeed pada homepage. Pakai Cloudflare Tunnel hostname yang sama dengan agent base URL **tanpa scheme & path**. **Jangan pakai IP VPS asli** — visitor akan melihat hostname ini.
 3. **Simpan**
 4. Klik tombol **Wifi icon** di baris itu → toast hijau "Agent reachable · synced" ✅
 5. Tunggu maks 1 menit (atau klik **Sync now** di topbar admin) → status berubah jadi **ONLINE** dengan angka CPU/RAM beneran 🎉
@@ -728,10 +726,10 @@ sqlite3 prisma/prod.db "PRAGMA integrity_check;"  # ok
 
 ## 13. Bandwidth & Cost Estimation
 
-Sejak v1.4 dashboard menampilkan **3 tier** speed: Port Capacity (free),
-Tested Speed (Ookla daily), dan Live Traffic (RX/TX gratis). Tambahan
-~6 GB/bulan per server untuk daily benchmark — masih jauh di bawah quota
-VPS provider standar.
+Sejak v1.6 dashboard menampilkan **2 tier** speed: Tested Speed (Ookla
+daily) dan Live Traffic (RX/TX gratis). Tambahan ~6 GB/bulan per
+server untuk daily benchmark — masih jauh di bawah quota VPS provider
+standar.
 
 ### Per-aktivitas (diukur real)
 
@@ -741,7 +739,7 @@ VPS provider standar.
 | Homepage page load (cached) | ~50 KB | repeat visit |
 | Polling `/api/servers/public` | ~5 KB | tiap 10 detik selama tab aktif |
 | Polling `/api/stats` | ~1 KB | tiap 10 detik selama tab aktif |
-| **LivePing** ke agent `/health` | ~200 bytes (req+res) | tiap 2.5 detik selama tab aktif |
+| Polling `/api/activity` | ~1 KB | tiap 10 detik selama tab aktif |
 | Sync agent → DB (auto-sync) | ~3 KB (request+response) | tiap 30-60 detik per server |
 | **Daily Ookla benchmark** | ~200 MB | 1× per 24 jam per server (off-peak) |
 

@@ -16,7 +16,7 @@ servers and sync data from the lightweight Python agent that runs on each VPS.
 ## Features
 
 - 🌐 Public realtime monitoring at `/` — no login required
-- 📈 Per-server detail with live charts (CPU, RAM, ping, traffic, slot)
+- 📈 Per-server detail with live charts (CPU, RAM, traffic, slot)
 - 🚦 Auto status: `ONLINE`, `WARNING` (≥90% slot), `FULL`, `OFFLINE`
 - 🛠️ Admin: CRUD servers, manual sync, test agent connection
 - 🔐 NextAuth credentials with anti-bruteforce + secure headers + sanitized responses
@@ -160,14 +160,12 @@ curl http://127.0.0.1:8787/health
 curl -H "X-API-Key: <key>" http://127.0.0.1:8787/api/status
 ```
 
-JSON shape returned by `/api/status` (v1.5 contract):
+JSON shape returned by `/api/status` (v1.6 contract):
 
 ```json
 {
   "ok": true,
   "uptime": 12345, "cpu": 24.1, "ram": 41.2,
-  "ping": 14,
-  "link_speed_mbps": 1000,
   "last_test_down_mbps": 845.6, "last_test_up_mbps": 812.3,
   "last_test_ping_ms": 14, "last_test_at": "2026-05-31T03:00:14Z",
   "rx_speed": 8.2, "tx_speed": 4.2, "speed": 12.4,
@@ -180,9 +178,8 @@ JSON shape returned by `/api/status` (v1.5 contract):
 }
 ```
 
-Three speed tiers, three honest answers:
+Two speed tiers, two honest answers:
 
-- `link_speed_mbps` → "how big is the pipe?" (kernel NIC link, free)
 - `last_test_*` → "what's the real-world max?" (Ookla, daily off-peak)
 - `rx_speed` / `tx_speed` → "how busy is it now?" (psutil delta)
 
@@ -202,9 +199,9 @@ snapshot Premium installer panels expose.
 `active_users` counts active subscribers (SSH lines with future expiry
 + unique Xray emails in `config.json`).
 
-Public endpoint (no auth, CORS-enabled): `GET /health` — small JSON
-heartbeat used by the dashboard's browser-side LivePing component for
-realtime latency measurement.
+Public endpoint (no auth): `GET /health` — small JSON heartbeat used
+as a generic liveness probe by ops scripts and the systemd service
+test.
 
 The agent auto-restarts via systemd. Logs: `journalctl -u sontoloyo-agent -f`.
 

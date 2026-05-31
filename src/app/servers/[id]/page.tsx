@@ -3,21 +3,19 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Cpu, MemoryStick, Wifi, Activity, Server, Globe, Download, Upload, Network, Zap } from "lucide-react";
+import { ArrowLeft, Cpu, MemoryStick, Activity, Server, Globe, Download, Upload, Network, Zap } from "lucide-react";
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip } from "recharts";
 
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PublicHeader } from "@/components/PublicHeader";
-import { LivePing } from "@/components/LivePing";
 import {
   flagUrl,
   formatBytes,
   formatUptime,
   slotPercent,
   shouldPoll,
-  formatLinkSpeed,
   formatTestedSpeed,
   formatRelativeAge,
 } from "@/lib/utils";
@@ -32,7 +30,7 @@ type Detail = ServerSummary & {
 };
 type MetricPoint = {
   ts: string;
-  activeUsers: number; pingMs: number; cpuPercent: number; ramPercent: number;
+  activeUsers: number; cpuPercent: number; ramPercent: number;
 };
 
 /**
@@ -131,28 +129,21 @@ export default function PublicServerDetail() {
           </div>
         </div>
 
-        <div className="grid gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-3 sm:gap-4 md:grid-cols-3">
           <Tile icon={Cpu}         label="CPU"   value={`${server.cpuPercent.toFixed(0)}%`} bar={server.cpuPercent} />
           <Tile icon={MemoryStick} label="RAM"   value={`${server.ramPercent.toFixed(0)}%`} bar={server.ramPercent} />
-          <div className="glass p-5">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs uppercase tracking-wider text-slate-400">Ping (live)</span>
-              <Wifi size={16} className="text-cyan-300" />
-            </div>
-            <div className="text-2xl font-bold">
-              <LivePing host={server.pingHost} fallback={server.pingMs} />
-            </div>
-          </div>
           <Tile icon={Server} label="Slot" value={`${server.activeUsers}/${server.maxSlot}`} bar={pct} />
         </div>
 
         {/*
-          ── 3-Tier Network Performance Panel ─────────────────────────────
-          The headline of this page. Three rows that answer three honest
-          questions:
-            1. Port  — how big is the pipe? (NIC link speed, kernel)
-            2. Tested — what's the real-world max? (Ookla daily benchmark)
-            3. Live   — how busy is it now? (RX/TX realtime delta)
+          ── 2-Tier Network Performance Panel ─────────────────────────────
+          Two rows that answer two honest questions:
+            1. Tested — what's the real-world max? (Ookla daily benchmark)
+            2. Live   — how busy is it now? (RX/TX realtime delta)
+
+          The previous "Port Capacity" tier was removed because the
+          kernel-reported NIC link speed was unreliable in containerized
+          deployments and added more confusion than information.
         */}
         <div className="glass p-5 sm:p-6">
           <div className="mb-3 flex items-center justify-between">
@@ -160,21 +151,11 @@ export default function PublicServerDetail() {
               <Network size={16} className="text-cyan-300" />
               Network Performance
             </h3>
-            <span className="text-[10px] text-slate-500">3-tier · realtime + daily</span>
+            <span className="text-[10px] text-slate-500">2-tier · realtime + daily</span>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-3">
-            {/* Tier 1 — Port capacity */}
-            <div className="rounded-xl border border-cyan-400/15 bg-cyan-400/5 p-4">
-              <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-cyan-300/80">
-                <Network size={11} /> Port Capacity
-              </div>
-              <div className="font-mono text-2xl font-bold text-slate-100">
-                {formatLinkSpeed(server.linkSpeedMbps)}
-              </div>
-            </div>
-
-            {/* Tier 2 — Tested speed (Ookla, daily) */}
+          <div className="grid gap-3 sm:grid-cols-2">
+            {/* Tier 1 — Tested speed (Ookla, daily) */}
             <div className="rounded-xl border border-fuchsia-400/15 bg-fuchsia-400/5 p-4">
               <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-fuchsia-300/80">
                 <Zap size={11} /> Tested Speed
@@ -202,7 +183,7 @@ export default function PublicServerDetail() {
               )}
             </div>
 
-            {/* Tier 3 — Live throughput */}
+            {/* Tier 2 — Live throughput */}
             <div className="rounded-xl border border-emerald-400/15 bg-emerald-400/5 p-4">
               <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-emerald-300/80">
                 <Activity size={11} /> Live Traffic

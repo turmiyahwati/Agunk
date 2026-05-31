@@ -47,8 +47,6 @@ async function main() {
   console.log("Next steps:");
   console.log("  1. Login at /login with the credentials above");
   console.log("  2. Add your real VPS servers under /admin/servers");
-  console.log("  3. Configure each server's 'Public Ping Host' for");
-  console.log("     browser-side live ping & speedtest on the public page");
 }
 
 main()
