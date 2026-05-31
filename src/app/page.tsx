@@ -34,12 +34,27 @@ export default function PublicMonitoring() {
   const cooldownUntilRef = useRef(0);
 
   // Stats fetcher — reused by polling AND the refresh button.
+  // Uses an AbortController so spam refreshes do not pile up overlapping
+  // requests; each new call cancels the previous in-flight fetch.
+  const statsAbortRef = useRef<AbortController | null>(null);
   const fetchStats = useCallback(async () => {
+    statsAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    statsAbortRef.current = ctrl;
     try {
-      const res = await fetch("/api/stats", { cache: "no-store" });
+      const res = await fetch("/api/stats", {
+        cache: "no-store",
+        signal: ctrl.signal,
+      });
       const j = await res.json();
+      if (ctrl.signal.aborted) return;
       setStats(j);
-    } catch {}
+    } catch (err) {
+      if ((err as DOMException)?.name === "AbortError") return;
+      // swallow other errors silently
+    } finally {
+      if (statsAbortRef.current === ctrl) statsAbortRef.current = null;
+    }
   }, []);
 
   // Realtime stats polling — paused while tab is hidden, refetches on focus.
@@ -59,6 +74,8 @@ export default function PublicMonitoring() {
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", onVis);
       }
+      statsAbortRef.current?.abort();
+      statsAbortRef.current = null;
     };
   }, [fetchStats]);
 

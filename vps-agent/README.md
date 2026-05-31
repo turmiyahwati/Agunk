@@ -3,7 +3,7 @@
 Lightweight Python (FastAPI) agent that exposes server health to the
 **PT Sontoloyo Monitor** dashboard. Author: **Pakde Xresx Digital Store**.
 
-Current contract: **v1.5** (3-tier speed display + 3-window traffic counters).
+Current contract: **v1.7** (2-tier speed display + 3-window traffic counters + active_logins live metric + CREATE event ring buffer with multi-source detection).
 
 ## What it reports
 
@@ -76,13 +76,24 @@ every 5 hours regardless of clock time. Persisted to
 when available, ss-based fallback otherwise).
 
 `events`: CREATE-event ring buffer drained per request. The agent's
-watcher thread monitors `/etc/ssh/.ssh.db` (line hash diff) and the
-xray config (`(email, protocol)` tuple diff) every
-`SONTOLOYO_WATCHER_INTERVAL` seconds (default 5). Each new entry yields
-one event with `kind ∈ {"SSH","VMESS","VLESS","TROJAN"}` and an ISO-8601
-UTC timestamp. PII is never serialized — only the kind enum and the
-timestamp leave the agent process. Set `SONTOLOYO_WATCHER_DISABLE=1` to
-disable the watcher entirely.
+watcher thread monitors **three independent sources** every
+`SONTOLOYO_WATCHER_INTERVAL` seconds (default `3`) and unions the
+results so an autoscript that writes to *any* of them is detected:
+
+  1. `/etc/ssh/.ssh.db` line hash diff → `kind=SSH`
+  2. `/etc/vmess/.vmess.db`, `/etc/vless/.vless.db`,
+     `/etc/trojan/.trojan.db` line hash diff → `kind=VMESS|VLESS|TROJAN`
+     (Indonesian Premium installer convention)
+  3. `"email"` field per-inbound in xray `config.json` → same protocol kinds
+     (secondary fallback for autoscripts that mirror entries into the
+     live config)
+
+Each new entry yields one event with `kind ∈ {"SSH","VMESS","VLESS","TROJAN"}`
+and an ISO-8601 UTC timestamp. PII is never serialized — only the kind
+enum and the timestamp leave the agent process. The dashboard
+de-duplicates near-simultaneous (kind, server) events from sources 2 and
+3 within a 5-second window. Set `SONTOLOYO_WATCHER_DISABLE=1` to disable
+the watcher entirely.
 
 `rx_speed` / `tx_speed`: realtime download / upload throughput
 (bytes-per-second through the kernel network counter, divided by the
@@ -167,7 +178,7 @@ Tune via environment variables in `/etc/sontoloyo-agent.env`:
 | `SONTOLOYO_API_KEY` | (auto-generated) | Bearer token required by `/api/*` endpoints |
 | `SONTOLOYO_HOST` | `0.0.0.0` | Bind address. Set to `127.0.0.1` after Cloudflare Tunnel is up. |
 | `SONTOLOYO_PORT` | `8787` | TCP port |
-| `SONTOLOYO_CACHE_TTL` | `3` | Seconds to memoize `/api/status` (cek-vme, vnstat) |
+| `SONTOLOYO_CACHE_TTL` | `5` | Seconds to memoize `/api/status` (cek-vme, vnstat) |
 | `SONTOLOYO_SPEEDTEST_HOUR` | `3` | Local hour-of-day to run the Ookla benchmark (0-23) |
 | `SONTOLOYO_SPEEDTEST_INTERVAL` | `24` | Hours between benchmark runs |
 | `SONTOLOYO_SPEEDTEST_CACHE` | `/var/lib/sontoloyo/last_speedtest.json` | Persistence path |

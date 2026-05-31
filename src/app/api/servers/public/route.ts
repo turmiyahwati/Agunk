@@ -62,5 +62,17 @@ export async function GET(req: Request) {
     domain: "",
   }));
 
-  return NextResponse.json({ servers: sanitized });
+  return NextResponse.json(
+    { servers: sanitized },
+    {
+      // Short edge / browser cache so spam-refresh within a 2-second
+      // window returns cached bytes instead of hitting the database.
+      // `stale-while-revalidate` lets the browser/CDN serve the cached
+      // response for up to 8 more seconds while it revalidates in the
+      // background — keeps the UI snappy under bursty load.
+      headers: {
+        "Cache-Control": "public, max-age=2, stale-while-revalidate=8",
+      },
+    },
+  );
 }
