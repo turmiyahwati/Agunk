@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DEFAULT_PROTOCOLS, type ProtocolItem } from "@/lib/protocols";
 
 const PROTOCOLS_EVENT = "agunk:protocols-updated";
@@ -9,21 +9,31 @@ const PROTOCOLS_EVENT = "agunk:protocols-updated";
  *
  * - State is initialized with DEFAULT_PROTOCOLS so SSR markup matches the
  *   first client paint (no hydration mismatch).
- * - Refetches on mount, on window focus, and on the same-tab custom
- *   event dispatched by the admin page after a successful save.
+ * - Refetches on mount (cancellable via AbortController), on window
+ *   focus, and on the same-tab custom event after admin save.
  */
 export function useProtocols() {
   const [items, setItems] = useState<ProtocolItem[]>(DEFAULT_PROTOCOLS);
   const [loaded, setLoaded] = useState(false);
+  const inflightRef = useRef<AbortController | null>(null);
 
   const refresh = useCallback(async () => {
+    inflightRef.current?.abort();
+    const ctrl = new AbortController();
+    inflightRef.current = ctrl;
     try {
-      const res = await fetch("/api/protocols", { cache: "no-store" });
+      const res = await fetch("/api/protocols", {
+        cache: "no-store",
+        signal: ctrl.signal,
+      });
       const j = await res.json();
+      if (ctrl.signal.aborted) return;
       if (Array.isArray(j?.protocols)) setItems(j.protocols);
-    } catch {
+    } catch (err) {
+      if ((err as DOMException)?.name === "AbortError") return;
       // Silent fail — defaults remain.
     } finally {
+      if (inflightRef.current === ctrl) inflightRef.current = null;
       setLoaded(true);
     }
   }, []);
@@ -37,6 +47,8 @@ export function useProtocols() {
     return () => {
       window.removeEventListener("focus", onFocus);
       window.removeEventListener(PROTOCOLS_EVENT, onCustom);
+      inflightRef.current?.abort();
+      inflightRef.current = null;
     };
   }, [refresh]);
 

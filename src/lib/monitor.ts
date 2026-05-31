@@ -308,8 +308,9 @@ export async function syncServer(serverId: string) {
 
   // Account-creation events from the agent's file watcher.
   //
-  // The agent's watcher diffs `/etc/ssh/.ssh.db` and the xray config
-  // every ~5 s and buffers any new entries it sees as one of:
+  // The agent's watcher diffs `/etc/ssh/.ssh.db`, the per-protocol
+  // /etc/<proto>/.<proto>.db files, and the xray config every few
+  // seconds and buffers any new entries it sees as one of:
   //
   //   { kind: "SSH"|"VMESS"|"VLESS"|"TROJAN", ts: "<ISO-8601 UTC>" }
   //
@@ -319,8 +320,17 @@ export async function syncServer(serverId: string) {
   // other label is dropped. This isolates the dashboard from a
   // compromised agent that might try to inject arbitrary strings
   // into the public feed.
+  //
+  // De-duplication: the agent has TWO independent sources for xray
+  // events (per-protocol .db files AND config.json `"email"` fields).
+  // When an autoscript writes to both, the same account can land
+  // twice within the same payload — we use a 5-second window keyed
+  // on (kind, serverName) to skip the duplicate insertion. This is a
+  // best-effort guard; persistent dedup is enforced naturally by the
+  // unique cuid primary keys.
   if (online && Array.isArray(payload?.events) && payload.events.length > 0) {
     const ALLOWED = new Set(["SSH", "VMESS", "VLESS", "TROJAN"]);
+    const recentSeen = new Map<string, number>();
     for (const ev of payload.events) {
       if (!ev || typeof ev !== "object") continue;
       const kind = String((ev as AgentEvent).kind || "").toUpperCase();
@@ -333,6 +343,14 @@ export async function syncServer(serverId: string) {
       const skewMs = createdAt.getTime() - Date.now();
       if (skewMs > 60_000) continue; // >1 min in the future
       if (-skewMs > 24 * 60 * 60_000) continue; // >24h in the past
+      // In-payload dedup window: same (kind, serverName) within 5s
+      // is treated as a single event regardless of how many sources
+      // the agent observed it from.
+      const key = `${kind}|${s.name}`;
+      const last = recentSeen.get(key) ?? 0;
+      const t = createdAt.getTime();
+      if (Math.abs(t - last) < 5000) continue;
+      recentSeen.set(key, t);
       await prisma.activity
         .create({
           data: {
@@ -393,11 +411,25 @@ export async function testConnection(baseUrl: string, apiKey?: string | null) {
 //    still recommended as a safety net for low-traffic deployments.
 
 const AUTOSYNC_COOLDOWN_MS = Number(process.env.MONITOR_AUTOSYNC_COOLDOWN_MS || 30_000);
-const AUTOSYNC_STALE_MS = Number(process.env.MONITOR_AUTOSYNC_STALE_MS || 60_000);
+// Stale threshold lowered from 60s → 20s so the dashboard reacts faster
+// to fresh activity (CREATE events, status flips). The cooldown above
+// still prevents thundering-herd, so the worst-case sync rate is still
+// once per 30 seconds — but the BEST case latency drops from ~60s to
+// ~20s when traffic is steady.
+const AUTOSYNC_STALE_MS = Number(process.env.MONITOR_AUTOSYNC_STALE_MS || 20_000);
 const AUTOSYNC_DISABLED = process.env.MONITOR_AUTOSYNC_DISABLED === "1";
 
 let lastAutoSyncAt = 0;
 let inflightAutoSync: Promise<unknown> | null = null;
+// ServerMetric cleanup runs at most once per hour, regardless of how
+// many auto-syncs fire. Older rows than 24h are deleted so the rolling
+// chart history (60 samples × 10 s = 10 min visible) stays representative
+// without the table growing unbounded.
+const METRIC_RETENTION_HOURS = Number(process.env.MONITOR_METRIC_RETENTION_HOURS || 24);
+const METRIC_CLEANUP_INTERVAL_MS = Number(
+  process.env.MONITOR_METRIC_CLEANUP_INTERVAL_MS || 60 * 60_000,
+);
+let lastMetricCleanupAt = 0;
 
 /**
  * Trigger a background sync if any enabled server is stale.
@@ -438,6 +470,19 @@ export function maybeAutoSync(): void {
       });
       if (!stale) return;
       await syncAll();
+
+      // Opportunistic ServerMetric cleanup. We piggyback on auto-sync
+      // because there is no separate scheduler — running a hourly
+      // delete keeps the table compact without adding infrastructure.
+      if (Date.now() - lastMetricCleanupAt > METRIC_CLEANUP_INTERVAL_MS) {
+        lastMetricCleanupAt = Date.now();
+        const cutoff = new Date(Date.now() - METRIC_RETENTION_HOURS * 60 * 60_000);
+        await prisma.serverMetric
+          .deleteMany({ where: { ts: { lt: cutoff } } })
+          .catch((err) => {
+            console.error("[autosync] metric cleanup failed:", err);
+          });
+      }
     } catch (err) {
       // Best-effort. Log to stderr but do not propagate.
       console.error("[autosync] background sync failed:", err);

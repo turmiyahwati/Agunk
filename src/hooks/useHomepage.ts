@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DEFAULT_HOMEPAGE, type HomepageContent } from "@/lib/homepage";
 
 const HOMEPAGE_EVENT = "agunk:homepage-updated";
@@ -9,23 +9,33 @@ const HOMEPAGE_EVENT = "agunk:homepage-updated";
  *
  * - State is initialized with DEFAULT_HOMEPAGE so server-rendered markup
  *   and the first client paint match exactly (no hydration mismatch).
- * - Refetches on mount, on window focus, and when the same-tab custom
- *   event is dispatched after an admin save.
+ * - Refetches on mount (cancellable via AbortController), on window
+ *   focus, and on the same-tab custom event after admin save.
  */
 export function useHomepage() {
   const [content, setContent] = useState<HomepageContent>(DEFAULT_HOMEPAGE);
   const [loaded, setLoaded] = useState(false);
+  const inflightRef = useRef<AbortController | null>(null);
 
   const refresh = useCallback(async () => {
+    inflightRef.current?.abort();
+    const ctrl = new AbortController();
+    inflightRef.current = ctrl;
     try {
-      const res = await fetch("/api/homepage", { cache: "no-store" });
+      const res = await fetch("/api/homepage", {
+        cache: "no-store",
+        signal: ctrl.signal,
+      });
       const j = await res.json();
+      if (ctrl.signal.aborted) return;
       if (j?.content) {
         setContent({ ...DEFAULT_HOMEPAGE, ...j.content });
       }
-    } catch {
+    } catch (err) {
+      if ((err as DOMException)?.name === "AbortError") return;
       // Silent fail — defaults remain.
     } finally {
+      if (inflightRef.current === ctrl) inflightRef.current = null;
       setLoaded(true);
     }
   }, []);
@@ -39,6 +49,8 @@ export function useHomepage() {
     return () => {
       window.removeEventListener("focus", onFocus);
       window.removeEventListener(HOMEPAGE_EVENT, onCustom);
+      inflightRef.current?.abort();
+      inflightRef.current = null;
     };
   }, [refresh]);
 

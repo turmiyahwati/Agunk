@@ -1,5 +1,6 @@
 "use client";
 import { memo } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import Image from "next/image";
 import { motion } from "framer-motion";
@@ -14,7 +15,6 @@ import {
   Users,
   ArrowRight,
 } from "lucide-react";
-import { Area, AreaChart, ResponsiveContainer } from "recharts";
 import { StatusBadge } from "./ui/StatusBadge";
 import { ProgressBar } from "./ui/ProgressBar";
 import { AnimatedNumber } from "./ui/AnimatedNumber";
@@ -26,7 +26,17 @@ import {
   formatTestedSpeed,
   formatRelativeAge,
 } from "@/lib/utils";
-import { useMetricBuffer, type SparkPoint } from "@/hooks/useMetricBuffer";
+import { useMetricBuffer } from "@/hooks/useMetricBuffer";
+
+// Recharts is ~50 KB gzipped — lazy-load it so the homepage initial
+// bundle stays lean. The card renders an empty `h-8` placeholder while
+// the chunk loads, then the sparkline fades in. SSR is disabled
+// because Recharts uses ResizeObserver which is not available
+// server-side.
+const MiniSparkline = dynamic(
+  () => import("./ui/MiniSparkline").then((m) => m.MiniSparkline),
+  { ssr: false, loading: () => <div className="h-8" /> },
+);
 
 export type ServerSummary = {
   id: string;
@@ -93,46 +103,6 @@ function fmtLiveMbps(mbps: number | null | undefined): string {
   if (mbps == null || !isFinite(mbps) || mbps <= 0) return "0";
   if (mbps < 10) return mbps.toFixed(1);
   return Math.round(mbps).toString();
-}
-
-/**
- * Compact sparkline area chart for CPU / RAM tiles. Renders nothing
- * until enough samples are collected to make a curve worth looking at
- * — a single dot is visual noise, two points form the first segment.
- */
-function MiniSparkline({
-  data,
-  color,
-  fillId,
-}: {
-  data: SparkPoint[];
-  color: string;
-  fillId: string;
-}) {
-  if (data.length < 2) return <div className="h-8" />;
-  return (
-    <div className="h-8 -mx-1 -mb-1">
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
-          <defs>
-            <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={color} stopOpacity={0.4} />
-              <stop offset="100%" stopColor={color} stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <Area
-            type="monotone"
-            dataKey="value"
-            stroke={color}
-            strokeWidth={1.5}
-            fill={`url(#${fillId})`}
-            isAnimationActive={false}
-            dot={false}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
-    </div>
-  );
 }
 
 function ServerCardImpl({ server, href }: { server: ServerSummary; href?: string }) {
