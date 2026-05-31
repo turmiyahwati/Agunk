@@ -34,6 +34,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     .map((m) => ({
       ts: m.ts.toISOString(),
       activeUsers: m.activeUsers,
+      activeLogins: m.activeLogins,
       speedMbps: m.speedMbps,
       rxSpeedMbps: m.rxSpeedMbps,
       txSpeedMbps: m.txSpeedMbps,

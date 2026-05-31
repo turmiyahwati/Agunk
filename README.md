@@ -160,7 +160,7 @@ curl http://127.0.0.1:8787/health
 curl -H "X-API-Key: <key>" http://127.0.0.1:8787/api/status
 ```
 
-JSON shape returned by `/api/status` (v1.6 contract):
+JSON shape returned by `/api/status` (v1.7 contract):
 
 ```json
 {
@@ -173,14 +173,17 @@ JSON shape returned by `/api/status` (v1.6 contract):
   "rx_today": 5432109, "tx_today": 3210987,
   "rx_boot":  2345678, "tx_boot":  1234567,
   "active_users": 27,
+  "active_logins": 12,
   "ssh": true, "xray": true, "nginx": true, "udp": false,
-  "total_ssh": 38, "total_xray": 0
+  "total_ssh": 38, "total_xray": 0,
+  "events": [{"kind": "VMESS", "ts": "2026-05-31T11:48:02Z"}]
 }
 ```
 
 Two speed tiers, two honest answers:
 
-- `last_test_*` → "what's the real-world max?" (Ookla, daily off-peak)
+- `last_test_*` → "what's the real-world max?" (Ookla, runs every
+  `SONTOLOYO_SPEEDTEST_INTERVAL` hours, default 24)
 - `rx_speed` / `tx_speed` → "how busy is it now?" (psutil delta)
 
 Three traffic windows, side-by-side on the dashboard:
@@ -197,7 +200,17 @@ snapshot Premium installer panels expose.
 `speed` is the combined sum, kept for v1.2 / v1.3 dashboards.
 
 `active_users` counts active subscribers (SSH lines with future expiry
-+ unique Xray emails in `config.json`).
++ unique Xray emails in `config.json`). `active_logins` is a separate
+metric — currently-connected sessions across SSH + Xray — used by the
+dashboard's Live Metrics chart so visitors see real-time usage rather
+than subscription totals.
+
+`events` is the agent's CREATE-event drain. The watcher thread snapshots
+`/etc/ssh/.ssh.db` and the xray config every 5 seconds and emits one
+event per new entry. Each `/api/status` response drains the buffer so
+the dashboard's Realtime Activity feed surfaces fresh CREATE events
+within seconds of an account being provisioned — no modification to
+the operator's autoscript required.
 
 Public endpoint (no auth): `GET /health` — small JSON heartbeat used
 as a generic liveness probe by ops scripts and the systemd service

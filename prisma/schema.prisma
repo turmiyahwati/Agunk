@@ -45,7 +45,21 @@ model Server {
   maxSlot     Int     @default(100)
 
   status      String @default("UNKNOWN")
+  /// `activeUsers` = subscribers count (registered accounts not yet
+  /// expired). Drives the Slot tile and the WARNING/FULL status
+  /// thresholds because "slot terpakai" semantically means "kapasitas
+  /// terjual", not "orang yang sedang login". Sourced from the agent's
+  /// `active_users` payload field which counts SSH lines with future
+  /// expiry + unique Xray emails in config.json.
   activeUsers Int    @default(0)
+  /// `activeLogins` = currently-connected sessions (live, not registered).
+  /// Counts established SSH processes + active vmess/vless/trojan
+  /// connections. Drives the Live Metrics "Users" chart on the server
+  /// detail page so visitors see real-time usage, not subscription
+  /// totals. Sourced from the agent's `active_logins` payload field
+  /// (agent v1.7+); older agents leave it at 0 and the chart shows a
+  /// flat line — that is intentional, not a bug.
+  activeLogins Int   @default(0)
   /// speedMbps stays as a Float column for backward compatibility with
   /// the v1.2 contract — populated as the sum of rxSpeedMbps + txSpeedMbps
   /// by the sync layer. The dashboard renders rx/tx separately now, so
@@ -109,7 +123,14 @@ model ServerMetric {
   server      Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
   ts          DateTime @default(now())
   status      String
-  activeUsers Int
+  /// Subscriber count snapshot at this tick (matches Server.activeUsers).
+  /// Kept for backward-compat consumers; the live chart now reads
+  /// `activeLogins` instead.
+  activeUsers  Int
+  /// Live login count snapshot at this tick (matches Server.activeLogins).
+  /// Default 0 so historic rows from agents pre-v1.7 stay valid without
+  /// a backfill — those rows render as a flat line on the chart.
+  activeLogins Int     @default(0)
   speedMbps   Float
   rxSpeedMbps Float    @default(0)
   txSpeedMbps Float    @default(0)

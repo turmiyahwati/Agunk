@@ -22,6 +22,15 @@ import { enforceRateLimit, PUBLIC_API_LIMIT, WRITE_LIMIT } from "@/lib/rate-limi
  * credential are NEVER stored in this table.
  *
  * Both endpoints are IP-rate-limited.
+ *
+ * Daily reset: the GET response only includes events from "today" in
+ * Asia/Jakarta (WIB, UTC+7). At local midnight the visible feed
+ * automatically empties even though the underlying rows remain in the
+ * DB for downstream audit / analytics. We chose this filter-at-read
+ * approach over a delete-scheduled-job because:
+ *  • Reset is instantaneous at midnight (no cron drift / window).
+ *  • Cleanup logic stays out of the request hot path.
+ *  • Historic rows are still queryable for incident review.
  */
 export const dynamic = "force-dynamic";
 
@@ -40,6 +49,29 @@ const createSchema = z.object({
   action: z.string().trim().min(1).max(40).default("CREATE"),
 });
 
+/**
+ * Returns the UTC instant that corresponds to today's midnight in
+ * Asia/Jakarta (WIB, UTC+7). Used as the lower bound of the daily
+ * activity feed.
+ *
+ *   WIB midnight  =  UTC 17:00 of the previous calendar day
+ *
+ * We compute it via string formatting against the IANA tz database so
+ * the value stays correct year-round (Indonesia does not currently
+ * observe DST, but this future-proofs the math against any tz change).
+ */
+function startOfTodayWIB(now: Date = new Date()): Date {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jakarta",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  // en-CA gives us "YYYY-MM-DD" directly.
+  const ymd = fmt.format(now);
+  return new Date(`${ymd}T00:00:00+07:00`);
+}
+
 export async function GET(req: Request) {
   const limited = enforceRateLimit(req, PUBLIC_API_LIMIT);
   if (limited) return limited;
@@ -49,6 +81,7 @@ export async function GET(req: Request) {
 
   try {
     const rows = await prisma.activity.findMany({
+      where: { createdAt: { gte: startOfTodayWIB() } },
       orderBy: { createdAt: "desc" },
       take: limit,
       select: {

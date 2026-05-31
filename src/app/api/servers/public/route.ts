@@ -37,6 +37,7 @@ export async function GET(req: Request) {
     select: {
       id: true, name: true, country: true, countryName: true,
       flag: true, provider: true, maxSlot: true, status: true, activeUsers: true,
+      activeLogins: true,
       speedMbps: true,
       rxSpeedMbps: true, txSpeedMbps: true,
       lastSpeedtestDownMbps: true,

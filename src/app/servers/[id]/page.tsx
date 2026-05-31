@@ -10,6 +10,7 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PublicHeader } from "@/components/PublicHeader";
+import { AnimatedNumber } from "@/components/ui/AnimatedNumber";
 import {
   flagUrl,
   formatBytes,
@@ -28,9 +29,16 @@ type Detail = ServerSummary & {
   sshActive: boolean; xrayActive: boolean; nginxActive: boolean; udpActive: boolean;
   totalSsh: number; totalXray: number;
 };
+// Sample shape returned by /api/servers/[id]/metrics. `activeUsers` is the
+// subscriber count snapshot (used for legacy / audit). `activeLogins` is
+// the live login count — what the chart's "Users" line plots so visitors
+// see real-time usage instead of subscription totals.
 type MetricPoint = {
   ts: string;
-  activeUsers: number; cpuPercent: number; ramPercent: number;
+  activeUsers: number;
+  activeLogins: number;
+  cpuPercent: number;
+  ramPercent: number;
 };
 
 /**
@@ -248,7 +256,8 @@ export default function PublicServerDetail() {
                     strokeWidth={2}
                     dot={false}
                     name="CPU %"
-                    isAnimationActive={false}
+                    isAnimationActive={true}
+                    animationDuration={800}
                   />
                   <Line
                     yAxisId="pct"
@@ -258,17 +267,19 @@ export default function PublicServerDetail() {
                     strokeWidth={2}
                     dot={false}
                     name="RAM %"
-                    isAnimationActive={false}
+                    isAnimationActive={true}
+                    animationDuration={800}
                   />
                   <Line
                     yAxisId="users"
                     type="monotone"
-                    dataKey="activeUsers"
+                    dataKey="activeLogins"
                     stroke="#10b981"
                     strokeWidth={1.5}
                     dot={false}
                     name="User Aktif"
-                    isAnimationActive={false}
+                    isAnimationActive={true}
+                    animationDuration={800}
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -277,8 +288,13 @@ export default function PublicServerDetail() {
 
           <div className="glass p-5">
             <h3 className="mb-3 font-semibold">Slot · Service Status</h3>
-            <div className="text-3xl font-bold">{server.activeUsers}<span className="text-base text-slate-400">/{server.maxSlot}</span></div>
-            <div className="mt-1 text-xs text-slate-400">{pct}% terpakai</div>
+            <div className="text-3xl font-bold">
+              <AnimatedNumber value={server.activeUsers} />
+              <span className="text-base text-slate-400">/{server.maxSlot}</span>
+            </div>
+            <div className="mt-1 text-xs text-slate-400">
+              <AnimatedNumber value={pct} />% terpakai
+            </div>
             <div className="mt-3"><ProgressBar value={pct} /></div>
 
             <div className="mt-5 grid grid-cols-2 gap-2 text-xs">

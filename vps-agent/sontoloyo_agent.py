@@ -17,7 +17,7 @@ HTTP API:
     GET  /api/traffic                  requires X-API-Key header
     GET  /api/online                   requires X-API-Key header
 
-JSON shape returned by /api/status (v1.6 contract):
+JSON shape returned by /api/status (v1.7 contract):
 
 {
   "ok": true,
@@ -25,9 +25,9 @@ JSON shape returned by /api/status (v1.6 contract):
   "cpu": 24.1, "ram": 41.2,             // percent
 
   // ── Network performance — 2-tier display strategy ──
-  "last_test_down_mbps": 845.6,         // Ookla speedtest, run daily off-peak
-  "last_test_up_mbps": 812.3,
-  "last_test_ping_ms": 14,
+  "last_test_down_mbps": 845.6,         // Ookla speedtest, runs every
+  "last_test_up_mbps": 812.3,           // SONTOLOYO_SPEEDTEST_INTERVAL
+  "last_test_ping_ms": 14,              // hours from the last run
   "last_test_at": "2026-05-31T03:00:14Z",
   "rx_speed": 8.2, "tx_speed": 4.2,     // realtime RX/TX throughput now
   "speed": 12.4,                        // legacy combined RX+TX (kept for v1.2)
@@ -39,8 +39,17 @@ JSON shape returned by /api/status (v1.6 contract):
 
   // ── Account & service ──
   "active_users": 27,                   // active subscribers (registered, not expired)
+  "active_logins": 12,                  // currently-connected sessions (SSH + Xray)
   "ssh": true, "xray": true, "nginx": true, "udp": false,
-  "total_ssh": 38, "total_xray": 0
+  "total_ssh": 38, "total_xray": 0,
+
+  // ── CREATE-event feed ──
+  // Drained per request, populated by the file watcher whenever a new
+  // SSH / vmess / vless / trojan account appears in the on-disk stores.
+  // Empty list when nothing new since the previous /api/status call.
+  "events": [
+    {"kind": "VMESS", "ts": "2026-05-31T11:48:02Z"}
+  ]
 }
 
 Speed display strategy (2 tiers):
@@ -80,6 +89,7 @@ import re
 import json
 import time
 import socket
+import hashlib
 import subprocess
 import threading
 from datetime import datetime, timedelta, timezone
@@ -95,20 +105,25 @@ PORT = int(os.environ.get("SONTOLOYO_PORT", "8787"))
 # ─────── Daily Ookla speedtest scheduler ───────────────────────────────
 #
 # The agent runs `speedtest --format=json` once on startup (initial
-# benchmark) then on a fixed local-time schedule (default 03:00 daily)
-# to keep the "Tested Speed" tier in the dashboard fresh without
-# disturbing customers during peak hours. The result is persisted to
-# disk so it survives agent restarts and so /api/status always has a
-# value to return — even on the very first request after a fresh
-# install (returns zeros until the initial benchmark completes ~30s
-# later).
+# benchmark) then on a pure interval schedule:
+#
+#   next_run = (last_run_ts in cache file) + SONTOLOYO_SPEEDTEST_INTERVAL hours
+#
+# We deliberately abandoned the previous "anchor hour + interval" scheme
+# (run at hour=03:00, then add interval) because it was bug-prone for
+# short intervals: if `now >= anchor_today + interval`, the math fell
+# into a 60-second tight loop. The new logic has only one knob —
+# interval — so a config like `SONTOLOYO_SPEEDTEST_INTERVAL=5` simply
+# means "run a fresh benchmark every 5 hours from the previous run",
+# regardless of clock time.
 #
 # Tunables (override via environment file):
-#   SONTOLOYO_SPEEDTEST_HOUR     = local hour-of-day to run, 0-23
-#   SONTOLOYO_SPEEDTEST_INTERVAL = hours between runs
+#   SONTOLOYO_SPEEDTEST_INTERVAL = hours between runs (default 24)
 #   SONTOLOYO_SPEEDTEST_CACHE    = persistence path
 #   SONTOLOYO_SPEEDTEST_DISABLE  = set to "1" to skip benchmarking entirely
-_SPEEDTEST_HOUR = int(os.environ.get("SONTOLOYO_SPEEDTEST_HOUR", "3"))
+#   SONTOLOYO_SPEEDTEST_HOUR     = (deprecated, ignored — kept readable
+#                                   for back-compat only; safe to remove
+#                                   from existing /etc/sontoloyo-agent.env)
 _SPEEDTEST_INTERVAL_HOURS = int(os.environ.get("SONTOLOYO_SPEEDTEST_INTERVAL", "24"))
 _SPEEDTEST_CACHE = os.environ.get(
     "SONTOLOYO_SPEEDTEST_CACHE", "/var/lib/sontoloyo/last_speedtest.json"
@@ -119,6 +134,40 @@ _SPEEDTEST_DISABLED = os.environ.get("SONTOLOYO_SPEEDTEST_DISABLE", "") == "1"
 _SPEEDTEST_TIMEOUT_S = int(os.environ.get("SONTOLOYO_SPEEDTEST_TIMEOUT", "300"))
 
 _speedtest_lock = threading.Lock()
+
+# ─────── CREATE-event watcher ───────────────────────────────────────────
+#
+# The dashboard's "Realtime Activity" feed surfaces account-creation
+# events (CREATE SSH / VMESS / VLESS / TROJAN) alongside the existing
+# server status transitions. We obtain these events without modifying
+# the operator's autoscript by diffing the on-disk account stores
+# every WATCHER_INTERVAL seconds:
+#
+#   * SSH:  /etc/ssh/.ssh.db          (Premium auto-installer convention)
+#   * Xray: /usr/local/etc/xray/config.json or /etc/xray/config.json
+#
+# The agent stores the previous snapshot in memory and emits a CREATE
+# event for every entry that appears in the new snapshot but not the
+# old one. Snapshots are stored as opaque hashes / (email, protocol)
+# tuples — we deliberately never keep usernames or emails in memory
+# longer than the few microseconds it takes to compute the diff, and
+# we never include them in the payload sent to the dashboard.
+#
+# The agent buffers events in a bounded ring (default 100). Each call
+# to /api/status drains the buffer into the response and clears it,
+# guaranteeing each event is delivered exactly once under normal
+# operation. If the dashboard is unreachable for longer than the
+# buffer can hold (e.g. >100 new accounts between syncs) the oldest
+# events are dropped — that is acceptable trade-off vs unbounded
+# memory growth.
+_WATCHER_INTERVAL_S = float(os.environ.get("SONTOLOYO_WATCHER_INTERVAL", "5"))
+_WATCHER_DISABLED = os.environ.get("SONTOLOYO_WATCHER_DISABLE", "") == "1"
+_EVENT_BUFFER_MAX = int(os.environ.get("SONTOLOYO_EVENT_BUFFER", "100"))
+
+_events_lock = threading.Lock()
+_events_buffer: list[dict] = []  # FIFO; trimmed to _EVENT_BUFFER_MAX
+_ssh_snapshot: set[str] = set()  # sha256-truncated hashes of #ssh# lines
+_xray_snapshot: set[tuple[str, str]] = set()  # (email, "VMESS"|"VLESS"|"TROJAN")
 
 # Per-call result cache (TTL seconds). Lets us make /api/status return in
 # milliseconds even though the underlying probes (cek-vme, vnstat, ping)
@@ -147,7 +196,7 @@ def _cached(key: str, ttl: float, producer: Callable[[], T]) -> T:
     return value
 
 
-app = FastAPI(title="Sontoloyo VPS Agent", version="1.6.0")
+app = FastAPI(title="Sontoloyo VPS Agent", version="1.7.0")
 
 
 # Prime the per-process CPU sampler so the first request that lands on
@@ -165,15 +214,24 @@ psutil.cpu_percent(interval=None)
 # not defined` because Python evaluates module bodies top-to-bottom and
 # those helpers live further down the file.
 @app.on_event("startup")
-def _start_speedtest_scheduler() -> None:
-    if _SPEEDTEST_DISABLED:
+def _start_background_threads() -> None:
+    if not _SPEEDTEST_DISABLED:
+        threading.Thread(
+            target=_speedtest_scheduler_loop,
+            name="speedtest-scheduler",
+            daemon=True,
+        ).start()
+    else:
         print("[speedtest] disabled via SONTOLOYO_SPEEDTEST_DISABLE=1", flush=True)
-        return
-    threading.Thread(
-        target=_speedtest_scheduler_loop,
-        name="speedtest-scheduler",
-        daemon=True,
-    ).start()
+
+    if not _WATCHER_DISABLED:
+        threading.Thread(
+            target=_watcher_loop,
+            name="account-watcher",
+            daemon=True,
+        ).start()
+    else:
+        print("[watcher] disabled via SONTOLOYO_WATCHER_DISABLE=1", flush=True)
 
 
 # ─────────────────────────── helpers ──────────────────────────────────────
@@ -753,31 +811,48 @@ def _run_speedtest() -> Optional[dict]:
 def _seconds_until_next_run() -> float:
     """Compute seconds until the next scheduled speedtest tick.
 
-    With default settings (hour=3, interval=24) this returns the time
-    until the next 03:00 in the local timezone. The agent uses the
-    machine's local time (``datetime.now()``) on purpose so operators
-    who run in WIB / WITA / WIT see the run land at the configured
-    local hour without any tzdata gymnastics.
+    Pure interval-based: read the cached `last_test["ts"]` from disk,
+    add SONTOLOYO_SPEEDTEST_INTERVAL hours, return the delta to now
+    (clamped to a 60 s minimum so a clock skew or stale cache cannot
+    spin the loop into a tight CPU burn).
+
+    When the cache is empty / unreadable / has no timestamp, returns
+    60 s — the loop will then attempt a benchmark run immediately,
+    which is the desired behaviour for a fresh agent install.
     """
-    now = datetime.now()
-    target = now.replace(
-        hour=_SPEEDTEST_HOUR, minute=0, second=0, microsecond=0,
-    )
-    if target <= now:
-        target += timedelta(hours=_SPEEDTEST_INTERVAL_HOURS)
-    return max(60.0, (target - now).total_seconds())
+    cached = _read_speedtest_cache()
+    last_iso = cached.get("ts")
+    if not last_iso:
+        return 60.0
+    try:
+        # Cache stores ISO-8601 with a `Z` suffix or `+00:00`. Both
+        # variants parse fine via `fromisoformat` once we normalise.
+        last = datetime.fromisoformat(str(last_iso).replace("Z", "+00:00"))
+    except Exception:
+        return 60.0
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    elapsed = (now - last).total_seconds()
+    interval_s = max(1, _SPEEDTEST_INTERVAL_HOURS) * 3600.0
+    remaining = interval_s - elapsed
+    return max(60.0, remaining)
 
 
 def _speedtest_scheduler_loop() -> None:
-    """Daemon thread: run an initial speedtest if no cache exists, then
-    sleep until the next scheduled tick.
+    """Daemon thread: run a benchmark whenever the previous result is
+    older than SONTOLOYO_SPEEDTEST_INTERVAL hours.
+
+    The first iteration tolerates a freshly-installed agent (empty
+    cache → run immediately so the dashboard's "Tested Speed" tile
+    shows a value within a minute of agent start). After that, the
+    loop simply sleeps until the cache file's `ts` field is older
+    than the interval and runs again.
 
     Designed to be the lowest-impact possible: we only run when the
-    operator's local time hits the configured hour (default 03:00),
-    which is the universally-acknowledged off-peak window for VPN
-    traffic. Tunable via ``SONTOLOYO_SPEEDTEST_HOUR`` and
-    ``SONTOLOYO_SPEEDTEST_INTERVAL`` so multi-region operators can
-    spread the load.
+    interval is actually exceeded, so a 5-hour cadence really does
+    cost ~6 GB/month per server and not more (one Ookla benchmark is
+    ~200 MB).
     """
     # Short startup delay so the network has a chance to settle and the
     # systemd unit's "Started" log line appears before the first
@@ -794,13 +869,177 @@ def _speedtest_scheduler_loop() -> None:
 
     while True:
         try:
-            time.sleep(_seconds_until_next_run())
+            wait = _seconds_until_next_run()
+            print(
+                f"[speedtest] next run in {wait/3600:.1f}h "
+                f"(interval={_SPEEDTEST_INTERVAL_HOURS}h)",
+                flush=True,
+            )
+            time.sleep(wait)
             _run_speedtest()
         except Exception as e:
             # Never let a stray error kill the scheduler thread — log
             # and try again at the next interval.
             print(f"[speedtest] scheduler error: {e}", flush=True)
             time.sleep(3600)
+
+
+# ─────────────────────────── account watcher ──────────────────────────
+#
+# Detects newly-created VPN accounts by snapshotting the on-disk
+# account stores periodically and emitting a CREATE event for every
+# entry that appears in the new snapshot but not the old one. Sees
+# every kind of account the operator's autoscript creates (FuxiVPS /
+# Vladiyot / Apik / etc) without requiring any modification to those
+# scripts.
+
+def _ssh_signatures(path: str = "/etc/ssh/.ssh.db") -> set[str]:
+    """Return short hashes of every `#ssh#`-prefixed line in `path`.
+
+    We hash so that no usernames stay in the agent's process memory
+    longer than a single read cycle. Truncating to 16 hex chars (64
+    bits) gives a collision probability well below 1 in 10^9 even with
+    100k accounts — more than enough for diff detection.
+    """
+    if not os.path.isfile(path):
+        return set()
+    sigs: set[str] = set()
+    try:
+        with open(path) as fp:
+            for line in fp:
+                stripped = line.strip()
+                if not stripped.startswith("#ssh#"):
+                    continue
+                sigs.add(hashlib.sha256(stripped.encode()).hexdigest()[:16])
+    except Exception:
+        return set()
+    return sigs
+
+
+def _xray_email_protocol_pairs() -> set[tuple[str, str]]:
+    """Return the set of `(email_hash, protocol)` tuples seen across
+    every Xray inbound in the live config.json.
+
+    Strategy: walk the raw config text linearly. Each time we hit a
+    `"protocol": "vmess|vless|trojan"` token we open a window that
+    extends until the NEXT protocol token (or 10 KB, whichever comes
+    first), and harvest every `"email": "..."` value inside that
+    window — those are the emails attached to that specific inbound.
+    Emails are SHA-256 hashed before we store them so PII never
+    persists in agent memory.
+
+    A single subscriber that exists across multiple inbounds (very
+    common for "multi-protocol" accounts that the autoscript creates
+    in vmess + vless + trojan in one shot) yields multiple tuples
+    — and therefore multiple CREATE events on first observation,
+    which matches the dashboard's labels CREATE VMESS / CREATE VLESS
+    / CREATE TROJAN that the operator wants to see.
+    """
+    PROTOCOLS = ("vmess", "vless", "trojan")
+    pairs: set[tuple[str, str]] = set()
+    for cfg in _xray_config_paths():
+        if not os.path.isfile(cfg):
+            continue
+        try:
+            with open(cfg) as fp:
+                content = fp.read()
+        except Exception:
+            continue
+        for m in re.finditer(r'"protocol"\s*:\s*"(vmess|vless|trojan)"', content, re.IGNORECASE):
+            protocol = m.group(1).upper()
+            start = m.end()
+            window = content[start:start + 10000]
+            next_p = re.search(r'"protocol"\s*:\s*"', window)
+            if next_p:
+                window = window[:next_p.start()]
+            for em in re.finditer(r'"email"\s*:\s*"([^"]+)"', window):
+                email = em.group(1)
+                email_hash = hashlib.sha256(email.encode()).hexdigest()[:16]
+                pairs.add((email_hash, protocol))
+        # Stop after the first config file that exists — secondary
+        # paths in `_xray_config_paths()` are fallbacks, not aggregates.
+        break
+    return pairs
+
+
+def _emit_event(kind: str) -> None:
+    """Append a CREATE event to the bounded ring buffer.
+
+    The dashboard pulls events from /api/status and clears them, so
+    in normal operation the buffer rarely holds more than a handful
+    of items. The hard cap (`_EVENT_BUFFER_MAX`) only matters during
+    extended dashboard outages, where the oldest events are dropped
+    instead of letting the buffer grow without bound.
+    """
+    ev = {
+        "kind": kind,
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    }
+    with _events_lock:
+        _events_buffer.append(ev)
+        if len(_events_buffer) > _EVENT_BUFFER_MAX:
+            # Drop oldest first.
+            del _events_buffer[: len(_events_buffer) - _EVENT_BUFFER_MAX]
+
+
+def _drain_events() -> list[dict]:
+    """Return all buffered events and clear the buffer atomically.
+
+    Called once per /api/status response. After draining, the events
+    are gone from agent memory — they live only in the dashboard's
+    Activity table at that point.
+    """
+    with _events_lock:
+        out = list(_events_buffer)
+        _events_buffer.clear()
+    return out
+
+
+def _watcher_loop() -> None:
+    """Daemon thread: poll on-disk account stores and emit events.
+
+    The very first iteration runs in "snapshot mode" — it captures
+    the current state without emitting events. Otherwise every
+    pre-existing account would be reported as freshly-created at
+    agent startup, flooding the dashboard's activity feed with
+    history. From the second iteration onwards, only DIFFs versus
+    the previous snapshot are emitted.
+    """
+    global _ssh_snapshot, _xray_snapshot
+    # Initial snapshot.
+    try:
+        _ssh_snapshot = _ssh_signatures()
+        _xray_snapshot = _xray_email_protocol_pairs()
+        print(
+            f"[watcher] initial snapshot: ssh={len(_ssh_snapshot)} "
+            f"xray={len(_xray_snapshot)}",
+            flush=True,
+        )
+    except Exception as e:
+        print(f"[watcher] initial snapshot failed: {e}", flush=True)
+
+    while True:
+        try:
+            time.sleep(_WATCHER_INTERVAL_S)
+
+            # SSH diff.
+            cur_ssh = _ssh_signatures()
+            new_ssh = cur_ssh - _ssh_snapshot
+            if new_ssh:
+                for _ in new_ssh:
+                    _emit_event("SSH")
+            _ssh_snapshot = cur_ssh
+
+            # Xray per-protocol diff.
+            cur_xray = _xray_email_protocol_pairs()
+            new_xray = cur_xray - _xray_snapshot
+            if new_xray:
+                for _, protocol in new_xray:
+                    _emit_event(protocol)
+            _xray_snapshot = cur_xray
+        except Exception as e:
+            print(f"[watcher] error: {e}", flush=True)
+            time.sleep(30)
 
 
 def _build_status_payload() -> dict:
@@ -858,12 +1097,23 @@ def _build_status_payload() -> dict:
         # Fallback to the live online count when neither DB nor config
         # has a parseable entry — better than a flat zero.
         "active_users": (active_ssh + active_xray) or (online_ssh + online_xray),
+        # Live login count — currently-connected sessions (SSH + Xray).
+        # Distinct from `active_users` (which counts subscribers). Drives
+        # the dashboard's "Live Metrics → Users" chart so visitors see
+        # real-time usage instead of subscription totals.
+        "active_logins": online_ssh + online_xray,
         "ssh":   _service_active("ssh") or _service_active("sshd"),
         "xray":  _service_active("xray"),
         "nginx": _service_active("nginx"),
         "udp":   _udp_active(),
         "total_ssh":  _total_ssh_accounts(),
         "total_xray": _total_xray_accounts(),
+        # CREATE-event drain. The watcher thread populates this buffer
+        # whenever it sees a new entry in /etc/ssh/.ssh.db or the xray
+        # config; we drain-and-clear here so each event is delivered
+        # to the dashboard exactly once. Empty list when nothing new
+        # since the previous /api/status request.
+        "events": _drain_events(),
     }
 
 

@@ -27,8 +27,10 @@ Current contract: **v1.5** (3-tier speed display + 3-window traffic counters).
   "rx_boot":  2345678, "tx_boot":  1234567,
 
   "active_users": 27,
+  "active_logins": 12,
   "ssh": true, "xray": true, "nginx": true, "udp": false,
-  "total_ssh": 38, "total_xray": 0
+  "total_ssh": 38, "total_xray": 0,
+  "events": [{"kind": "VMESS", "ts": "2026-05-31T11:48:02Z"}]
 }
 ```
 
@@ -59,11 +61,28 @@ The dashboard renders `rx_today` / `tx_today` as the prominent
 operators see daily-billing numbers alongside the session-level
 snapshot Premium installer panels expose in their main menu.
 
-`last_test_*`: Ookla speedtest result, refreshed once per 24 hours by
-the agent's internal scheduler at the configured local hour (default
-`03:00`). Persisted to `/var/lib/sontoloyo/last_speedtest.json` so it
-survives agent restarts. `last_test_at` is `null` until the first
-benchmark completes.
+`last_test_*`: Ookla speedtest result. The agent runs a fresh benchmark
+every `SONTOLOYO_SPEEDTEST_INTERVAL` hours (default 24, set to e.g. `5`
+for tighter cadence). Scheduler is pure interval-based — it reads the
+last run timestamp from cache and waits `interval - elapsed` seconds
+before the next run, so configurations like `INTERVAL=5` actually run
+every 5 hours regardless of clock time. Persisted to
+`/var/lib/sontoloyo/last_speedtest.json` so it survives agent restarts.
+`last_test_at` is `null` until the first benchmark completes.
+
+`active_logins`: currently-connected sessions, distinct from
+`active_users` (subscriber count). Sum of established `sshd:` processes
++ active vmess/vless/trojan connections (`cek-vme`/`cek-vle`/`cek-tro`
+when available, ss-based fallback otherwise).
+
+`events`: CREATE-event ring buffer drained per request. The agent's
+watcher thread monitors `/etc/ssh/.ssh.db` (line hash diff) and the
+xray config (`(email, protocol)` tuple diff) every
+`SONTOLOYO_WATCHER_INTERVAL` seconds (default 5). Each new entry yields
+one event with `kind ∈ {"SSH","VMESS","VLESS","TROJAN"}` and an ISO-8601
+UTC timestamp. PII is never serialized — only the kind enum and the
+timestamp leave the agent process. Set `SONTOLOYO_WATCHER_DISABLE=1` to
+disable the watcher entirely.
 
 `rx_speed` / `tx_speed`: realtime download / upload throughput
 (bytes-per-second through the kernel network counter, divided by the
