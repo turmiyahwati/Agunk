@@ -29,10 +29,23 @@ export type ProtocolItem = {
   slug: ProtocolSlug;
   /** Display label (admin-editable, defaults to slug). */
   name: string;
-  /** LEGACY small subtitle — kept so older saved data keeps roundtripping. */
+  /**
+   * @deprecated Legacy field for the old protocol card layout. Use
+   * subtitle/body/feature{N}{Label,Value} for the new tabbed card. Will
+   * be removed in v2.0.
+   */
   description: string;
-  /** LEGACY bullets — kept for backward compat. */
+  /**
+   * @deprecated Legacy field for the old protocol card layout. Use
+   * subtitle/body/feature{N}{Label,Value} for the new tabbed card. Will
+   * be removed in v2.0.
+   */
   bullet1: string;
+  /**
+   * @deprecated Legacy field for the old protocol card layout. Use
+   * subtitle/body/feature{N}{Label,Value} for the new tabbed card. Will
+   * be removed in v2.0.
+   */
   bullet2: string;
   /** Hide the card on the public page when false. */
   active: boolean;

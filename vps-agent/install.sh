@@ -159,5 +159,13 @@ echo "      • VPS Agent base URL : https://\$DOMAIN"
 echo "      • API Key            : ${API_KEY}"
 echo "      Click the Wifi icon to test → toast hijau \"Agent reachable · synced\" ✅"
 echo
+echo " 📋 SUMMARY — fields to enter in dashboard 'Tambah Server':"
+echo "      Name              : (your choice, e.g. INDO-01)"
+echo "      VPS Agent base URL: https://<your-tunnel-hostname>"
+echo "      API Key           : ${API_KEY}"
+echo
+echo " 📋 Don't forget to also configure on the dashboard:"
+echo "      Admin → Backup & Recovery → set passphrase + SMTP if not done"
+echo
 echo " Full guide with screenshots: DEPLOY.md §7 (Cloudflare Tunnel)"
 echo "=========================================================="

@@ -1,10 +1,10 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import Image from "next/image";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Cpu, MemoryStick, Activity, Server, Globe, Download, Upload, Network, Zap } from "lucide-react";
-import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip } from "recharts";
 
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { ProgressBar } from "@/components/ui/ProgressBar";
@@ -21,6 +21,18 @@ import {
   formatRelativeAge,
 } from "@/lib/utils";
 import type { ServerSummary } from "@/components/ServerCard";
+
+/**
+ * Recharts (~50 KB gzipped) is heavy and only used for the live history
+ * chart below the network panel. Lazy-load it via `next/dynamic` so the
+ * route's initial JS bundle drops noticeably and the rest of the detail
+ * page paints first. The placeholder keeps the layout stable while the
+ * chunk arrives.
+ */
+const LiveMetricsChart = dynamic(
+  () => import("@/components/ui/LiveMetricsChart"),
+  { ssr: false, loading: () => <div className="h-56" /> },
+);
 
 const REFRESH_MS = Number(process.env.NEXT_PUBLIC_REFRESH_MS || 10000);
 
@@ -57,20 +69,43 @@ export default function PublicServerDetail() {
   const { id } = useParams<{ id: string }>();
   const [server, setServer] = useState<Detail | null>(null);
   const [metrics, setMetrics] = useState<MetricPoint[]>([]);
+  /**
+   * Abort the previous in-flight pair of fetches when a new tick fires
+   * or when the component unmounts. Matches the pattern used in
+   * `useServers.ts` so a slow response can never clobber a newer one
+   * and we never call `setState` on an unmounted component.
+   */
+  const inflightRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     let alive = true;
     async function load() {
+      inflightRef.current?.abort();
+      const ctrl = new AbortController();
+      inflightRef.current = ctrl;
       try {
         const [a, b] = await Promise.all([
-          fetch("/api/servers/public", { cache: "no-store" }).then((r) => r.json()),
-          fetch(`/api/servers/${id}/metrics?limit=60`, { cache: "no-store" }).then((r) => r.json()),
+          fetch("/api/servers/public", {
+            cache: "no-store",
+            signal: ctrl.signal,
+          }).then((r) => r.json()),
+          fetch(`/api/servers/${id}/metrics?limit=60`, {
+            cache: "no-store",
+            signal: ctrl.signal,
+          }).then((r) => r.json()),
         ]);
         if (!alive) return;
+        if (ctrl.signal.aborted) return;
         const found = (a.servers as Detail[]).find((s) => s.id === id) || null;
         setServer(found);
         setMetrics(b.metrics || []);
-      } catch {}
+      } catch (e: any) {
+        // Silently ignore aborted requests — they are expected when the
+        // user navigates away or a faster tick supersedes this one.
+        if (e?.name === "AbortError") return;
+      } finally {
+        if (inflightRef.current === ctrl) inflightRef.current = null;
+      }
     }
     load();
     const t = setInterval(() => {
@@ -88,6 +123,8 @@ export default function PublicServerDetail() {
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", onVis);
       }
+      inflightRef.current?.abort();
+      inflightRef.current = null;
     };
   }, [id]);
 
@@ -229,60 +266,7 @@ export default function PublicServerDetail() {
               </div>
             </div>
             <div className="h-56">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={metrics}>
-                  <XAxis dataKey="ts" hide />
-                  {/*
-                    Two y-axes so CPU/RAM (0-100%) and active users
-                    (0..maxSlot) don't squash each other on the same
-                    scale. activeUsers gets its own axis on the right.
-                  */}
-                  <YAxis yAxisId="pct" hide domain={[0, 100]} />
-                  <YAxis yAxisId="users" orientation="right" hide />
-                  <Tooltip
-                    contentStyle={{
-                      background: "rgba(15,23,42,0.9)",
-                      border: "1px solid rgba(34,211,238,0.3)",
-                      borderRadius: 12,
-                      color: "#e2e8f0",
-                    }}
-                    labelFormatter={(v) => new Date(v).toLocaleTimeString()}
-                  />
-                  <Line
-                    yAxisId="pct"
-                    type="monotone"
-                    dataKey="cpuPercent"
-                    stroke="#22d3ee"
-                    strokeWidth={2}
-                    dot={false}
-                    name="CPU %"
-                    isAnimationActive={true}
-                    animationDuration={800}
-                  />
-                  <Line
-                    yAxisId="pct"
-                    type="monotone"
-                    dataKey="ramPercent"
-                    stroke="#a855f7"
-                    strokeWidth={2}
-                    dot={false}
-                    name="RAM %"
-                    isAnimationActive={true}
-                    animationDuration={800}
-                  />
-                  <Line
-                    yAxisId="users"
-                    type="monotone"
-                    dataKey="activeLogins"
-                    stroke="#10b981"
-                    strokeWidth={1.5}
-                    dot={false}
-                    name="User Aktif"
-                    isAnimationActive={true}
-                    animationDuration={800}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              <LiveMetricsChart data={metrics} />
             </div>
           </div>
 

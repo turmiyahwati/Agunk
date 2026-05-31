@@ -18,7 +18,6 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
     "db:reset": "prisma db push --force-reset && tsx prisma/seed.ts",
-    "db:backup": "node scripts/backup-db.mjs",
     "monitor:sync": "tsx scripts/sync-once.ts"
   },
   "dependencies": {
@@ -27,7 +26,7 @@
     "clsx": "^2.1.1",
     "framer-motion": "^11.11.17",
     "lucide-react": "^0.460.0",
-    "next": "14.2.18",
+    "next": "14.2.35",
     "next-auth": "^4.24.10",
     "nodemailer": "^7.0.13",
     "react": "^18.3.1",
@@ -47,7 +46,7 @@
     "autoprefixer": "^10.4.20",
     "dotenv": "^16.4.5",
     "eslint": "^8.57.1",
-    "eslint-config-next": "14.2.18",
+    "eslint-config-next": "14.2.35",
     "postcss": "^8.4.49",
     "prisma": "^5.22.0",
     "tailwindcss": "^3.4.15",

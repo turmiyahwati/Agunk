@@ -60,6 +60,7 @@ model Server {
   /// (agent v1.7+); older agents leave it at 0 and the chart shows a
   /// flat line — that is intentional, not a bug.
   activeLogins Int   @default(0)
+  /// @deprecated Use rxSpeedMbps + txSpeedMbps. Will be dropped in v2.0.
   /// speedMbps stays as a Float column for backward compatibility with
   /// the v1.2 contract — populated as the sum of rxSpeedMbps + txSpeedMbps
   /// by the sync layer. The dashboard renders rx/tx separately now, so
@@ -123,6 +124,7 @@ model ServerMetric {
   server      Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
   ts          DateTime @default(now())
   status      String
+  /// @deprecated Use activeLogins. Will be dropped in v2.0.
   /// Subscriber count snapshot at this tick (matches Server.activeUsers).
   /// Kept for backward-compat consumers; the live chart now reads
   /// `activeLogins` instead.
