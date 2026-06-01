@@ -86,8 +86,7 @@ function classifyFetchError(err: unknown, url: string, hadKey: boolean): string 
   const e = err as { name?: string; message?: string; cause?: { code?: string; message?: string } };
   const code = e?.cause?.code || "";
   const msg = String(e?.message || "");
-  const statusMatch = msg.match(/^HTTP (\d{3})/);
-  const status = statusMatch?.[1];
+  const status = msg.match(/^HTTP (\d{3})/)?.[1];
 
   // HTTP-level errors (we threw these ourselves)
   if (status === "401") return `HTTP 401 — API key mismatch (check Server "API Key")`;
@@ -160,31 +159,6 @@ function deriveStatus(active: number, max: number, online: boolean): ServerStatu
   return ServerStatus.ONLINE;
 }
 
-/**
- * Validate speedtest data consistency. All fields should be present or all absent.
- * Returns true if data is valid (all present or properly cleared).
- */
-function isSpeedtestDataValid(
-  down?: number,
-  up?: number,
-  ping?: number,
-  at?: string | null,
-): boolean {
-  const hasMeasurements = (down ?? 0) > 0 || (up ?? 0) > 0;
-  const hasTimestamp = at != null;
-  
-  // Valid states:
-  // 1. All zeros/null (never tested) ✓
-  // 2. Has measurements AND timestamp (valid result) ✓
-  // 3. Has measurements but no timestamp (edge case, accept it) ✓
-  // Invalid:
-  // 4. Has timestamp but no measurements (inconsistent)
-  if (!hasMeasurements && hasTimestamp) {
-    return false;
-  }
-  return true;
-}
-
 export async function syncServer(serverId: string) {
   const s = await prisma.server.findUnique({ where: { id: serverId } });
   if (!s) throw new Error("Server not found");
@@ -228,16 +202,6 @@ export async function syncServer(serverId: string) {
           : s.speedMbps)
       : 0;
 
-  // Speedtest validation: only persist if data is consistent.
-  // If agent reports partial data (e.g., down_mbps but no timestamp),
-  // we keep the previous DB value to avoid inconsistent state.
-  const speedtestValid = isSpeedtestDataValid(
-    payload?.last_test_down_mbps,
-    payload?.last_test_up_mbps,
-    payload?.last_test_ping_ms,
-    payload?.last_test_at,
-  );
-
   const data = {
     status,
     activeUsers: online ? active : 0,
@@ -251,34 +215,28 @@ export async function syncServer(serverId: string) {
     rxSpeedMbps: rxSpeed,
     txSpeedMbps: txSpeed,
     // ── Tier 2: Daily Ookla speedtest result (refreshed at 03:00 local) ──
-    // Persist whenever the agent reports it AND data is consistent.
-    // We never overwrite with zeros from an offline agent — that would
-    // erase a perfectly good historical benchmark just because the agent
-    // hiccupped. Also validate speedtest state to avoid partial data.
-    lastSpeedtestDownMbps: online && speedtestValid
+    // Persist whenever the agent reports it. We never overwrite with
+    // zeros from an offline agent — that would erase a perfectly good
+    // historical benchmark just because the agent hiccupped.
+    lastSpeedtestDownMbps: online
       ? payload?.last_test_down_mbps ?? s.lastSpeedtestDownMbps
       : s.lastSpeedtestDownMbps,
-    lastSpeedtestUpMbps: online && speedtestValid
+    lastSpeedtestUpMbps: online
       ? payload?.last_test_up_mbps ?? s.lastSpeedtestUpMbps
       : s.lastSpeedtestUpMbps,
-    lastSpeedtestPingMs: online && speedtestValid
+    lastSpeedtestPingMs: online
       ? payload?.last_test_ping_ms ?? s.lastSpeedtestPingMs
       : s.lastSpeedtestPingMs,
-    lastSpeedtestAt: online && speedtestValid && payload?.last_test_at
+    lastSpeedtestAt: online && payload?.last_test_at
       ? new Date(payload.last_test_at)
       : s.lastSpeedtestAt,
-    // Traffic counters: persist RX/TX from agent, never overwrite with
-    // offline zeros. Agent uses vnstat which has daily reset at midnight
-    // SERVER LOCAL TIME (not UTC), so timezone offset is baked into the
-    // agent's day bucket already. Dashboard receives the correct values
-    // and just persists them as-is.
     rxBytes: BigInt(online ? payload?.rx ?? Number(s.rxBytes) : Number(s.rxBytes)),
     txBytes: BigInt(online ? payload?.tx ?? Number(s.txBytes) : Number(s.txBytes)),
     // Today's bucket and since-reboot snapshot are persisted whenever
     // the agent reports them. We never overwrite with zeros from an
     // offline payload — that would erase the legitimate value the DB
     // already holds and make the dashboard's TODAY tile flash to 0
-    // every time a sync fails. Agent handles timezone in vnstat output.
+    // every time a sync fails.
     rxBytesToday: BigInt(
       online ? payload?.rx_today ?? Number(s.rxBytesToday) : Number(s.rxBytesToday),
     ),
@@ -291,18 +249,13 @@ export async function syncServer(serverId: string) {
     txBytesBoot: BigInt(
       online ? payload?.tx_boot ?? Number(s.txBytesBoot) : Number(s.txBytesBoot),
     ),
-    // Uptime persisted as seconds from agent. Frontend is responsible for
-    // formatting to "1h 23m" or similar via formatUptime() utility.
     uptimeSec: online ? payload?.uptime ?? s.uptimeSec : 0,
-    // CPU/RAM: realtime monitoring — set to 0 when offline (agent not reachable).
-    // This is by design for monitoring dashboard (shows real current state).
     cpuPercent: online ? payload?.cpu ?? s.cpuPercent : 0,
     ramPercent: online ? payload?.ram ?? s.ramPercent : 0,
     sshActive: online ? !!payload?.ssh : false,
     xrayActive: online ? !!payload?.xray : false,
     nginxActive: online ? !!payload?.nginx : false,
     udpActive: online ? !!payload?.udp : false,
-    // Account totals: keep DB value when offline (subscriptions don't disappear).
     totalSsh: online ? payload?.total_ssh ?? s.totalSsh : s.totalSsh,
     totalXray: online ? payload?.total_xray ?? s.totalXray : s.totalXray,
     lastError: error,
