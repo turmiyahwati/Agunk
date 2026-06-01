@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/guards";
-import { serializeServers } from "@/lib/serialize";
+import { serializeServer, serializeServers } from "@/lib/serialize";
 import { safeErrorMessage } from "@/lib/api-error";
 
 /**
@@ -54,7 +54,15 @@ export async function POST(req: Request) {
     const body = await req.json();
     const data = createSchema.parse(body);
     const created = await prisma.server.create({ data });
-    return NextResponse.json({ server: { ...created, rxBytes: 0, txBytes: 0 } }, { status: 201 });
+    // serializeServer() converts ALL six BigInt counter columns to
+    // Number so NextResponse.json (which uses JSON.stringify under the
+    // hood) can serialize the response. The previous one-liner only
+    // overrode rxBytes + txBytes, leaving rxBytesToday / txBytesToday
+    // / rxBytesBoot / txBytesBoot as BigInt — JSON.stringify then
+    // threw `TypeError: Do not know how to serialize a BigInt`, which
+    // safeErrorMessage couldn't classify and reported as the opaque
+    // "Something went wrong" toast in the admin UI.
+    return NextResponse.json({ server: serializeServer(created) }, { status: 201 });
   } catch (e: unknown) {
     return NextResponse.json({ error: safeErrorMessage(e) }, { status: 400 });
   }

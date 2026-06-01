@@ -325,15 +325,26 @@ function IntervalField({
         ))}
       </div>
       <div className="mt-2 flex items-center gap-2">
+        {/*
+          0→"" mapping so a freshly cleared field is genuinely empty
+          (placeholder shown) instead of stuck at "0". The previous
+          `value={valueMs}` left "0" displayed after backspace, then
+          typing digits produced "0XYZ" appearance until next render.
+        */}
         <input
           type="number"
           className="input w-32"
           min={2_000}
           max={600_000}
           step={500}
-          value={valueMs}
+          value={valueMs === 0 ? "" : valueMs}
           onChange={(e) => {
-            const v = Number(e.target.value);
+            const raw = e.target.value;
+            if (raw === "") {
+              onChange(0);
+              return;
+            }
+            const v = Number(raw);
             if (Number.isFinite(v)) onChange(v);
           }}
         />

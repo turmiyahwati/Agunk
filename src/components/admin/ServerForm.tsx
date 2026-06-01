@@ -71,7 +71,26 @@ export function ServerForm({
         <p className="mt-1 text-[11px] text-slate-500">Disimpan privat — admin saja. Tidak ditampilkan ke visitor publik.</p>
       </Field>
       <Field label="Max Slot" required>
-        <input className="input" type="number" min={1} required value={v.maxSlot} onChange={(e) => set("maxSlot", Number(e.target.value))} />
+        {/*
+          Display empty string when state is 0 so a freshly cleared
+          field actually LOOKS empty. The previous `value={v.maxSlot}`
+          rendered "0" whenever state was 0, and pressing keys then
+          appended digits to that "0" — producing "030" / "023" until
+          submit (browser quirk on `<input type="number">`). Mapping
+          0 → "" + handling "" → 0 in onChange lets the user backspace
+          to a blank input and type the real number directly.
+        */}
+        <input
+          className="input"
+          type="number"
+          min={1}
+          required
+          value={v.maxSlot === 0 ? "" : v.maxSlot}
+          onChange={(e) => {
+            const raw = e.target.value;
+            set("maxSlot", raw === "" ? 0 : Number(raw));
+          }}
+        />
       </Field>
 
       <Field label="Country code (ISO-2)" required>
@@ -85,7 +104,18 @@ export function ServerForm({
         <input className="input" value={v.flag ?? ""} onChange={(e) => set("flag", e.target.value)} placeholder="https://..." />
       </Field>
       <Field label="Refresh interval (ms)">
-        <input className="input" type="number" min={1000} step={500} value={v.refreshMs} onChange={(e) => set("refreshMs", Number(e.target.value))} />
+        {/* Same 0→"" mapping as Max Slot; see comment above. */}
+        <input
+          className="input"
+          type="number"
+          min={1000}
+          step={500}
+          value={v.refreshMs === 0 ? "" : v.refreshMs}
+          onChange={(e) => {
+            const raw = e.target.value;
+            set("refreshMs", raw === "" ? 0 : Number(raw));
+          }}
+        />
       </Field>
 
       <Field label="VPS Agent base URL">
