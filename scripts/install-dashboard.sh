@@ -14,11 +14,23 @@
 #
 # Usage:
 #
-#   curl -fsSL https://raw.githubusercontent.com/turmiyahwati/Agunk/main/scripts/install-dashboard.sh | sudo bash
+#   # Recommended for first-time interactive install — clone the repo
+#   # locally, then run the installer from the checkout. This keeps
+#   # `stdin` connected to your terminal so the env wizard can prompt.
 #
-# or, if the repo is already cloned:
-#
+#   git clone https://github.com/turmiyahwati/Agunk.git /root/sontoloyo-monitor
+#   cd /root/sontoloyo-monitor
 #   sudo bash scripts/install-dashboard.sh
+#
+#   # Non-interactive one-liner (CI / scripted) — every required value
+#   # MUST be supplied via env vars. The installer will refuse to run
+#   # `curl | sudo bash` interactively because the curl pipe steals
+#   # stdin from the env wizard, corrupting `.env` with garbage data.
+#
+#   SONTOLOYO_NON_INTERACTIVE=1 \
+#   SONTOLOYO_DOMAIN=monitor.example.com \
+#   SONTOLOYO_ADMIN_EMAIL=admin@example.com \
+#   curl -fsSL https://raw.githubusercontent.com/turmiyahwati/Agunk/main/scripts/install-dashboard.sh | sudo bash
 #
 # Environment overrides (all optional — interactive prompts otherwise):
 #
@@ -82,6 +94,48 @@ pause_cf() {
 
 if [[ ! -f /etc/os-release ]] || ! grep -q "Ubuntu" /etc/os-release; then
   warn "Tested only on Ubuntu 24.04. Other distros may need manual tweaks."
+fi
+
+# ─── stdin-not-a-terminal guard (curl | bash safety net) ─────────────────
+# When the script is piped into bash via `curl | sudo bash`, the bash
+# process inherits the curl pipe as its stdin. Any subsequent `read`
+# call (e.g. the env wizard's "Dashboard public hostname" prompt) then
+# silently consumes the next *line of the script itself* as user input
+# — corrupting `.env` with garbage like:
+#
+#   NEXTAUTH_URL="https://# ════════════════════════════════════════════"
+#
+# which then crashes the Next.js build with `TypeError: Invalid URL`.
+#
+# We detect this anti-pattern by checking whether stdin is a TTY (`-t 0`).
+# If it isn't AND the operator hasn't opted into non-interactive mode,
+# bail out NOW — before any state is written, before any package is
+# installed — with a clear remediation hint. Non-interactive runs that
+# legitimately have no TTY (CI, scripted deploys) must set
+# SONTOLOYO_NON_INTERACTIVE=1 plus the required env vars.
+if [[ ! -t 0 && "${SONTOLOYO_NON_INTERACTIVE:-0}" != "1" ]]; then
+  err "stdin is not a terminal — interactive prompts will not work."
+  err ""
+  err "This usually means you ran:"
+  err "    curl -fsSL ${C_DIM}…install-dashboard.sh${C_RESET} | sudo bash"
+  err ""
+  err "That pattern silently breaks the .env wizard because the curl"
+  err "pipe steals stdin away from this script. Use one of these instead:"
+  err ""
+  err "  ${C_BOLD}Option A — clone first, then run interactively (recommended):${C_RESET}"
+  err ""
+  err "    git clone ${SONTOLOYO_REPO:-https://github.com/turmiyahwati/Agunk.git} /root/sontoloyo-monitor"
+  err "    cd /root/sontoloyo-monitor"
+  err "    sudo bash scripts/install-dashboard.sh"
+  err ""
+  err "  ${C_BOLD}Option B — non-interactive (every required value via env):${C_RESET}"
+  err ""
+  err "    SONTOLOYO_NON_INTERACTIVE=1 \\"
+  err "    SONTOLOYO_DOMAIN=monitor.example.com \\"
+  err "    SONTOLOYO_ADMIN_EMAIL=admin@example.com \\"
+  err "    curl -fsSL …install-dashboard.sh | sudo bash"
+  err ""
+  exit 1
 fi
 
 # ─── Configurable defaults ────────────────────────────────────────────────
@@ -238,18 +292,57 @@ else
     ADMIN_EMAIL_VAL="${SONTOLOYO_ADMIN_EMAIL:-}"
     ADMIN_PASS_VAL="${SONTOLOYO_ADMIN_PASSWORD:-}"
 
+    # ─── Input validators (defense in depth) ──────────────────────────
+    # The TTY guard above blocks the obvious `curl | bash` foot-gun,
+    # but somebody might still feed garbage via env var (typos, copy-
+    # paste with surrounding quotes, leftover protocol prefixes, etc.).
+    # These regex checks fail loud BEFORE the value reaches `.env`,
+    # rather than letting Next.js build crash 5 minutes later with an
+    # opaque `TypeError: Invalid URL`.
+    validate_domain() {
+      local d="$1"
+      if [[ -z "$d" ]]; then
+        die "Dashboard domain is required."
+      fi
+      if [[ "$d" =~ ^https?:// ]]; then
+        die "Domain '${d}' must NOT include a scheme — drop the 'http://' or 'https://' prefix."
+      fi
+      if [[ "$d" =~ [[:space:]] ]]; then
+        die "Domain '${d}' contains whitespace. Type the hostname only (e.g. monitor.example.com)."
+      fi
+      if [[ "$d" =~ [\#\\\"\'\$\`\<\>\&\|\;] ]]; then
+        die "Domain '${d}' contains special characters. Type the hostname only (letters, digits, dots, hyphens)."
+      fi
+      if [[ ${#d} -lt 4 || ${#d} -gt 253 ]]; then
+        die "Domain '${d}' length (${#d}) outside DNS limits (4-253)."
+      fi
+      if ! [[ "$d" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]]; then
+        die "Domain '${d}' is not a valid hostname. Expected something like 'monitor.example.com'."
+      fi
+    }
+    validate_email() {
+      local e="$1"
+      if [[ "$e" =~ [[:space:]\#\\\"\'\$\`\<\>\&\|\;] ]]; then
+        die "Email '${e}' contains characters not allowed in an email address."
+      fi
+      if ! [[ "$e" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+        die "Email '${e}' does not look like a valid email address."
+      fi
+    }
+
     if [[ -z "$DOMAIN" && "$NON_INTERACTIVE" != "1" ]]; then
       while [[ -z "$DOMAIN" ]]; do
         read -rp "${C_BOLD}Dashboard public hostname${C_RESET} (e.g. monitoring.example.com): " DOMAIN
       done
     fi
-    [[ -n "$DOMAIN" ]] || die "Dashboard domain is required."
+    validate_domain "$DOMAIN"
 
     if [[ -z "$ADMIN_EMAIL_VAL" && "$NON_INTERACTIVE" != "1" ]]; then
       read -rp "${C_BOLD}Admin email${C_RESET} [admin@${DOMAIN}]: " ADMIN_EMAIL_VAL
       ADMIN_EMAIL_VAL="${ADMIN_EMAIL_VAL:-admin@${DOMAIN}}"
     fi
     ADMIN_EMAIL_VAL="${ADMIN_EMAIL_VAL:-admin@${DOMAIN}}"
+    validate_email "$ADMIN_EMAIL_VAL"
 
     if [[ -z "$ADMIN_PASS_VAL" ]]; then
       ADMIN_PASS_VAL="$(openssl rand -base64 18 | tr -d '+/=' | cut -c1-20)"
@@ -657,12 +750,18 @@ fi
 # db:seed silently failing on a non-default schema and leaving an
 # empty User table, which presents as "Invalid email or password" on
 # every login attempt with no other clue.
+#
+# The User schema only stores admin accounts (no public registration,
+# no role column — see prisma/schema.prisma User model). Any active
+# row IS an admin. Counting `WHERE active = 1` catches both the
+# "table empty" failure mode and the "row exists but disabled"
+# failure mode in one query.
 if [[ -f "${INSTALL_DIR}/prisma/prod.db" ]] && command -v sqlite3 >/dev/null 2>&1; then
-  USER_COUNT="$(sqlite3 "${INSTALL_DIR}/prisma/prod.db" 'SELECT COUNT(*) FROM User WHERE role = "ADMIN";' 2>/dev/null || echo 0)"
+  USER_COUNT="$(sqlite3 "${INSTALL_DIR}/prisma/prod.db" 'SELECT COUNT(*) FROM User WHERE active = 1;' 2>/dev/null || echo 0)"
   if [[ "${USER_COUNT}" -ge 1 ]]; then
-    ok "Admin user seeded (${USER_COUNT} ADMIN row(s))"
+    ok "Admin user seeded (${USER_COUNT} active admin row(s))"
   else
-    err "No ADMIN user in DB — db:seed likely failed. Run: cd ${INSTALL_DIR} && npm run db:seed"
+    err "No active admin user in DB — db:seed likely failed. Run: cd ${INSTALL_DIR} && npm run db:seed"
     SMOKE_FAILED=$((SMOKE_FAILED + 1))
   fi
 fi
