@@ -346,13 +346,19 @@ function SettingsForm({ config, onSaved }: { config: BackupConfig; onSaved: () =
           </p>
         </Field>
         <Field label="Retention (days)">
+          {/* 0→"" mapping so the field can be backspaced clean and
+              retyped directly. Without it, clearing then typing "30"
+              produces "030" (browser quirk on type=number). */}
           <input
             type="number"
             className="input"
             min={1}
             max={365}
-            value={form.retentionDays}
-            onChange={(e) => set("retentionDays", Number(e.target.value))}
+            value={form.retentionDays === 0 ? "" : form.retentionDays}
+            onChange={(e) => {
+              const raw = e.target.value;
+              set("retentionDays", raw === "" ? 0 : Number(raw));
+            }}
           />
         </Field>
 
@@ -409,13 +415,17 @@ function SettingsForm({ config, onSaved }: { config: BackupConfig; onSaved: () =
           />
         </Field>
         <Field label="SMTP port">
+          {/* 0→"" mapping; same reason as Retention (days). */}
           <input
             type="number"
             className="input"
             min={1}
             max={65535}
-            value={form.smtpPort}
-            onChange={(e) => set("smtpPort", Number(e.target.value))}
+            value={form.smtpPort === 0 ? "" : form.smtpPort}
+            onChange={(e) => {
+              const raw = e.target.value;
+              set("smtpPort", raw === "" ? 0 : Number(raw));
+            }}
           />
         </Field>
 
