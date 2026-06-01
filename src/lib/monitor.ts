@@ -86,7 +86,8 @@ function classifyFetchError(err: unknown, url: string, hadKey: boolean): string 
   const e = err as { name?: string; message?: string; cause?: { code?: string; message?: string } };
   const code = e?.cause?.code || "";
   const msg = String(e?.message || "");
-  const status = msg.match(/^HTTP (\d{3})/)?.[];
+  const statusMatch = msg.match(/^HTTP (\d{3})/);
+  const status = statusMatch?.[1];
 
   // HTTP-level errors (we threw these ourselves)
   if (status === "401") return `HTTP 401 — API key mismatch (check Server "API Key")`;
