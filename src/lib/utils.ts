@@ -1,131 +1,88 @@
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
-
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
-
-export function formatBytes(bytes: number | bigint, decimals = 2): string {
-  const n = typeof bytes === "bigint" ? Number(bytes) : bytes;
-  if (!n || n <= 0) return "0 B";
-  const k = 1024;
-  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
-  const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(k)));
-  return `${(n / Math.pow(k, i)).toFixed(decimals)} ${units[i]}`;
-}
-
+/**
+ * Format seconds into human-readable uptime string.
+ * Examples:
+ *   3661 seconds → "1h 1m"
+ *   120 seconds → "2m"
+ *   60 seconds → "1m"
+ */
 export function formatUptime(seconds: number): string {
-  if (!seconds || seconds <= 0) return "—";
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h ${m}m`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
+  if (typeof seconds !== 'number' || seconds < 0 || !isFinite(seconds)) {
+    return "—";
+  }
 
-export function flagUrl(country: string): string {
-  const code = (country || "un").toLowerCase();
-  return `https://flagcdn.com/${code}.svg`;
-}
+  const s = Math.floor(seconds);
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
 
-export function slotPercent(active: number, max: number): number {
-  if (!max) return 0;
-  return Math.min(100, Math.round((active / max) * 100));
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  return minutes > 0 ? `${minutes}m` : "0m";
 }
 
 /**
- * Render a Mbps reading with sensible precision.
- *
- *   0           → "—"     (no traffic detected — render as a dash, not "0 Mb")
- *   0 < n < 10  → "X.Y Mb" (1 decimal — keeps sub-Mbps VPN traffic visible)
- *   n >= 10     → "N Mb"   (integer — large pipes don't need decimals)
- *
- * Pairs with the agent's float-typed `speed` field. The previous int
- * rendering ("X Mb" with a falsy-zero check) hid every traffic level
- * below 1 Mbps as "—", which made operators believe the dashboard was
- * broken when in fact a VPN with 0.4 Mbps avg traffic was working fine.
+ * Convert bytes to human-readable format (GB, MB, KB, B).
+ * Automatically selects appropriate unit based on magnitude.
  */
-export function formatSpeed(mbps: number | null | undefined, suffix = "Mb"): string {
-  if (mbps == null || !isFinite(mbps) || mbps <= 0) return "—";
-  if (mbps < 10) return `${mbps.toFixed(1)} ${suffix}`;
-  return `${Math.round(mbps)} ${suffix}`;
+export function formatBytes(bytes: number | bigint, decimals = 2): string {
+  if (typeof bytes === 'bigint') {
+    bytes = Number(bytes);
+  }
+  
+  if (typeof bytes !== 'number' || bytes < 0 || !isFinite(bytes)) {
+    return "0 B";
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = bytes;
+  let unitIndex = 0;
+
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex++;
+  }
+
+  return `${size.toFixed(decimals)} ${units[unitIndex]}`;
 }
 
 /**
- * Format a Mbps reading from a periodic Ookla speedtest result.
- *
- * Distinct from `formatSpeed` which formats live throughput: for a
- * tested baseline, sub-Mbps precision adds noise rather than information
- * and large numbers are the headline. Returns "—" when no test has run
- * yet so the dashboard can show "Belum diuji" instead of a misleading
- * zero.
- *
- *   0          → "—"
- *   1..99      → "85"
- *   100+       → "845"
+ * Safe BigInt to Number conversion with overflow protection.
+ * Returns the number, or a fallback value if conversion would overflow.
  */
-export function formatTestedSpeed(mbps: number | null | undefined): string {
-  if (mbps == null || !isFinite(mbps) || mbps <= 0) return "—";
-  return Math.round(mbps).toString();
+export function safeBigIntToNumber(value: bigint | number, fallback = 0): number {
+  if (typeof value === 'number') return value;
+  if (typeof value !== 'bigint') return fallback;
+  
+  const num = Number(value);
+  // Check if conversion lost precision (overflow)
+  if (!isFinite(num) || num < 0) return fallback;
+  return num;
 }
 
 /**
- * Compact "time ago" caption for the speedtest freshness label.
- *
- * Shorter than the full Indonesian `timeAgo` which renders
- * "5 menit lalu" — the speedtest tier wants something that fits beside
- * a number on a small server card without wrapping.
- *
- *   null/invalid → "belum diuji"
- *   < 60s        → "barusan"
- *   < 60m        → "Xm lalu"
- *   < 24h        → "Xh lalu"
- *   else         → "Xd lalu"
+ * Clamp a value between min and max.
  */
-export function formatRelativeAge(input: Date | string | null | undefined): string {
-  if (!input) return "belum diuji";
-  const d = input instanceof Date ? input : new Date(input);
-  if (isNaN(d.getTime())) return "belum diuji";
-  const seconds = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
-  if (seconds < 60) return "barusan";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m lalu`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h lalu`;
-  const days = Math.floor(hours / 24);
-  return `${days}d lalu`;
+export function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 /**
- * Indonesian relative-time formatter used by the activity log.
- *  < 5s  → "baru saja"
- *  < 60s → "X detik lalu"
- *  < 1h  → "X menit lalu"
- *  < 24h → "X jam lalu"
- *  else  → "X hari lalu"
+ * Calculate percentage display with bounds checking.
+ * Returns value between 0-100, or the fallback if invalid.
  */
-export function timeAgo(input: Date | string | number): string {
-  const d = input instanceof Date ? input : new Date(input);
-  const seconds = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
-  if (seconds < 5) return "baru saja";
-  if (seconds < 60) return `${seconds} detik lalu`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} menit lalu`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} jam lalu`;
-  const days = Math.floor(hours / 24);
-  return `${days} hari lalu`;
+export function percentOrFallback(value: number, fallback = 0): number {
+  const num = Number(value);
+  if (!isFinite(num)) return fallback;
+  return clamp(num, 0, 100);
 }
 
 /**
- * Polling guard: returns true when the page is currently visible (or when
- * running on the server / before hydration). Used to skip realtime fetches
- * while the user has the tab in the background — saves CPU, network, and
- * mobile battery without breaking the live feel (we refetch on visibility
- * change anyway).
+ * Normalize URL: add http:// if missing, remove trailing slash.
  */
-export function shouldPoll(): boolean {
-  if (typeof document === "undefined") return true;
-  return !document.hidden;
+export function normalizeApiUrl(url: string | null | undefined): string | null {
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  return withScheme.replace(/\/+$/, "");
 }
